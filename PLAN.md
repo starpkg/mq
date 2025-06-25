@@ -15,12 +15,12 @@ Key differentiators include automatic retry handling, unified dead letter queue 
 
 ## Core Design Principles
 
-1. **Unified Interface Design**: Provide a consistent API that abstracts service-specific differences while preserving access to unique features when needed
-2. **Performance-First Architecture**: Leverage Go routines and connection pooling for high-throughput scenarios while maintaining thread-safe operations
-3. **Security by Default**: All credentials and sensitive configuration values are handled securely using the base package's secret management capabilities
-4. **Resilient Operations**: Built-in retry logic, exponential backoff, and comprehensive error handling ensure reliable message delivery
-5. **Flexible Message Routing**: Support both simple queue operations and advanced topic-based routing with subscription management
-6. **Resource Management**: Automatic connection lifecycle management with proper cleanup and resource disposal
+1. **Unified Abstraction**: Abstract common messaging concepts into a single, consistent API regardless of underlying service implementation
+2. **Concept Normalization**: Map service-specific features to unified concepts (e.g., visibility_timeout + lock_duration → lock_duration)
+3. **Performance-First Architecture**: Leverage Go routines and connection pooling for high-throughput scenarios while maintaining thread-safe operations
+4. **Security by Default**: All credentials and sensitive configuration values are handled securely using the base package's secret management capabilities
+5. **Intelligent Adaptation**: Automatically adapt unified API calls to service-specific implementations and limitations
+6. **Essential Features Only**: Focus on commonly used features and provide elegant fallbacks for service-specific limitations
 
 ## Starlark Constraints & Adaptations
 
@@ -52,6 +52,21 @@ The `mq` module provides a unified interface, but not all features are available
 | **Message Sessions** | ❌ | ✅ | Azure Service Bus only |
 | **Duplicate Detection** | ✅ (FIFO only) | ✅ | Different implementations |
 
+## Unified API Design
+
+### Concept Normalization Strategy
+
+The module normalizes different service concepts into unified abstractions:
+
+| Unified Concept | AWS SQS Implementation | Azure Service Bus Implementation | Normalization Logic |
+|-----------------|------------------------|-----------------------------------|-------------------|
+| **Message Lock** | `visibility_timeout` | `lock_duration` | Use `lock_duration` as unified parameter |
+| **Message Scheduling** | `delay_seconds` (≤15min) | `scheduled_enqueue_time` | Use `scheduled_time` with automatic fallback |
+| **Message Grouping** | `message_group_id` (FIFO) | `session_id` | Use `session_id` as unified parameter |
+| **Message Properties** | `message_attributes` | `properties` | Use `properties` as unified parameter |
+| **Dead Letter Handling** | Separate DLQ + config | Built-in subqueue | Unified `dead_letter_config` |
+| **Batch Processing** | Max 10 messages | Max 100 messages | Auto-split based on service limits |
+
 ### Core Module Functions
 
 #### Connection Management
@@ -71,9 +86,10 @@ connect(
 # Utility functions
 get_supported_services() -> list    # Returns ["aws_sqs", "azure_servicebus"]
 get_client_info(client) -> dict    # Returns client connection details
+check_feature_support(client, feature) -> bool  # Check if feature is supported
 ```
 
-### Client Object API
+### Unified Client API
 
 #### Queue Operations
 
@@ -84,48 +100,49 @@ delete_queue(name) -> bool
 list_queues(prefix="") -> list
 get_queue(name) -> Queue
 queue_exists(name) -> bool
+purge_queue(name) -> bool
 
 # Queue information
-get_queue_attributes(name) -> dict
-set_queue_attributes(name, attributes) -> bool
-get_queue_url(name) -> string  # AWS SQS specific
+get_queue_info(name) -> dict    # Unified queue information
 ```
 
-#### Message Operations
+#### Unified Message Operations
 
 ```python
-# Single message operations
+# Core message operations
 send_message(queue_name, body, **options) -> MessageResult
 receive_messages(queue_name, max_count=1, **options) -> list
-delete_message(queue_name, message_id, **options) -> bool
-peek_messages(queue_name, max_count=1) -> list
+delete_message(queue_name, message_id) -> bool
+delete_messages(queue_name, message_ids) -> list  # Batch delete
 
-# Batch operations for performance
-send_messages(queue_name, messages) -> list  # List of MessageResult
-delete_messages(queue_name, message_ids) -> list  # List of success/failure
+# Message lock management (unified visibility/lock concept)
+extend_message_lock(queue_name, message_id, lock_duration) -> bool
+release_message_lock(queue_name, message_id) -> bool
 
-# Message visibility management
-change_message_visibility(queue_name, message_id, timeout) -> bool
-extend_message_visibility(queue_name, message_id, timeout) -> bool
+# Smart batch operations (auto-adapts to service limits)
+send_messages_batch(queue_name, messages) -> list  # Auto-handles batch size limits
+
+# Message inspection (available when supported)
+peek_messages(queue_name, max_count=1) -> list    # Graceful fallback on AWS SQS
 ```
 
-#### Advanced Message Features
+#### Unified Scheduling and DLQ
 
 ```python
-# Scheduled/delayed messages
-schedule_message(queue_name, body, delay_seconds, **options) -> MessageResult
-cancel_scheduled_message(queue_name, message_id) -> bool
+# Message scheduling (unified approach)
+send_scheduled_message(queue_name, body, scheduled_time, **options) -> MessageResult
+cancel_scheduled_message(queue_name, message_id) -> bool  # Where supported
 
-# Dead letter queue operations
+# Dead letter queue operations (unified interface)
 get_dead_letter_messages(queue_name, max_count=10) -> list
-requeue_dead_letter_message(queue_name, message_id) -> bool
+reprocess_dead_letter_message(queue_name, message_id) -> bool
 purge_dead_letter_queue(queue_name) -> bool
 ```
 
-#### Topic Operations (Azure Service Bus)
+#### Pub/Sub Operations (when supported)
 
 ```python
-# Topic management
+# Topic management (Azure Service Bus only, graceful failure on AWS SQS)
 create_topic(name, **options) -> Topic
 delete_topic(name) -> bool
 list_topics(prefix="") -> list
@@ -139,114 +156,88 @@ list_subscriptions(topic_name) -> list
 # Publish/Subscribe operations
 publish_message(topic_name, body, **options) -> MessageResult
 subscribe_messages(topic_name, subscription_name, max_count=1, **options) -> list
+
+# Message filtering (Azure Service Bus only)
+add_subscription_filter(topic_name, subscription_name, rule_name, filter_expression) -> bool
+remove_subscription_filter(topic_name, subscription_name, rule_name) -> bool
+list_subscription_filters(topic_name, subscription_name) -> list
 ```
 
-#### Message Filtering and Routing
+### Unified API Implementation
 
-```python
-# Message attributes and properties
-set_message_attributes(message, attributes) -> Message
-get_message_attributes(message) -> dict
-add_message_property(message, key, value) -> Message
+#### Core Operations (Universal Support)
 
-# Subscription rules (Azure Service Bus)
-add_subscription_rule(topic_name, subscription_name, rule_name, filter_expression) -> bool
-remove_subscription_rule(topic_name, subscription_name, rule_name) -> bool
-list_subscription_rules(topic_name, subscription_name) -> list
-```
+| Function | Implementation Strategy | AWS SQS Mapping | Azure Service Bus Mapping |
+|----------|-------------------------|-----------------|---------------------------|
+| `send_message()` | Direct mapping | Native SQS API | Native Service Bus API |
+| `receive_messages()` | Adaptive batch size | max_count ≤ 10 | max_count ≤ 32 |
+| `delete_message()` | Direct mapping | Native delete | Native complete |
+| `delete_messages()` | Auto-batch splitting | Batch ≤ 10 | Batch ≤ 100 |
+| `extend_message_lock()` | Unified lock concept | Change visibility timeout | Renew message lock |
+| `release_message_lock()` | Early release | Change to 0 seconds | Abandon message |
 
-### Function Support by Service
+#### Queue Management (Universal Support)
 
-#### Queue Operations Compatibility
+| Function | Implementation Strategy | AWS SQS Mapping | Azure Service Bus Mapping |
+|----------|-------------------------|-----------------|---------------------------|
+| `create_queue()` | Unified options mapping | CreateQueue API | CreateQueue API |
+| `delete_queue()` | Direct mapping | DeleteQueue API | DeleteQueue API |
+| `list_queues()` | Direct mapping | ListQueues API | ListQueues API |
+| `get_queue_info()` | Normalized attributes | GetQueueAttributes | GetQueueRuntimeProperties |
+| `purge_queue()` | Direct mapping | PurgeQueue API | Native purge |
 
-| Function | AWS SQS | Azure Service Bus | AWS Notes | Azure Notes |
-|----------|---------|-------------------|-----------|-------------|
-| `create_queue()` | ✅ | ✅ | - | - |
-| `delete_queue()` | ✅ | ✅ | - | - |
-| `list_queues()` | ✅ | ✅ | - | - |
-| `get_queue()` | ✅ | ✅ | - | - |
-| `queue_exists()` | ✅ | ✅ | - | - |
-| `get_queue_attributes()` | ✅ | ✅ | - | Different attribute names |
-| `set_queue_attributes()` | ✅ | ✅ | - | Limited attributes |
-| `get_queue_url()` | ✅ | ❌ | Returns SQS URL | Not applicable |
+#### Smart Adaptations
 
-#### Message Operations Compatibility
+| Function | AWS SQS Behavior | Azure Service Bus Behavior | Unified Behavior |
+|----------|------------------|----------------------------|------------------|
+| `peek_messages()` | Return empty + warning | Native peek | Graceful fallback |
+| `send_scheduled_message()` | delay_seconds (≤15min) | scheduled_enqueue_time | Auto-convert/warn |
+| `cancel_scheduled_message()` | fail() with explanation | Native cancel | Conditional support |
+| `send_messages_batch()` | Auto-split to batches of 10 | Auto-split to batches of 100 | Transparent handling |
 
-| Function | AWS SQS | Azure Service Bus | AWS Limits | Azure Limits |
-|----------|---------|-------------------|------------|--------------|
-| `send_message()` | ✅ | ✅ | 256KB body | 256KB body (1MB Premium) |
-| `receive_messages()` | ✅ | ✅ | max_count ≤ 10 | max_count ≤ 32 |
-| `delete_message()` | ✅ | ✅ | - | - |
-| `peek_messages()` | ❌ | ✅ | Not supported | Supported |
-| `send_messages()` | ✅ | ✅ | max 10 messages | max 100 messages |
-| `delete_messages()` | ✅ | ✅ | max 10 messages | max 100 messages |
-| `change_message_visibility()` | ✅ | ❌ | 12 hours max | Use locks instead |
-| `extend_message_visibility()` | ✅ | ❌ | 12 hours max | Use locks instead |
+#### Pub/Sub Operations (Conditional Support)
 
-#### Advanced Message Features Compatibility
+| Function | AWS SQS Behavior | Azure Service Bus Behavior | Unified Behavior |
+|----------|------------------|----------------------------|------------------|
+| `create_topic()` | fail() with SNS guidance | Native create | Conditional implementation |
+| `publish_message()` | fail() with SNS guidance | Native publish | Conditional implementation |
+| `create_subscription()` | fail() with SNS guidance | Native create | Conditional implementation |
+| `subscribe_messages()` | fail() with SNS guidance | Native receive | Conditional implementation |
 
-| Function | AWS SQS | Azure Service Bus | AWS Implementation | Azure Implementation |
-|----------|---------|-------------------|-------------------|---------------------|
-| `schedule_message()` | ✅ | ✅ | DelaySeconds (≤15 min) | ScheduledEnqueueTime |
-| `cancel_scheduled_message()` | ❌ | ✅ | Not supported | Supported |
-| `get_dead_letter_messages()` | ✅ | ✅ | Separate DLQ | Built-in DLQ |
-| `requeue_dead_letter_message()` | ✅ | ✅ | Manual process | Built-in feature |
-| `purge_dead_letter_queue()` | ✅ | ✅ | - | - |
+### Unified Parameter Design
 
-#### Topic Operations Compatibility
+#### Queue Configuration (Normalized)
 
-| Function | AWS SQS | Azure Service Bus | Notes |
-|----------|---------|-------------------|-------|
-| `create_topic()` | ❌ | ✅ | Use SNS separately | Native support |
-| `delete_topic()` | ❌ | ✅ | Use SNS separately | Native support |
-| `list_topics()` | ❌ | ✅ | Use SNS separately | Native support |
-| `topic_exists()` | ❌ | ✅ | Use SNS separately | Native support |
-| `create_subscription()` | ❌ | ✅ | Use SNS separately | Native support |
-| `delete_subscription()` | ❌ | ✅ | Use SNS separately | Native support |
-| `list_subscriptions()` | ❌ | ✅ | Use SNS separately | Native support |
-| `publish_message()` | ❌ | ✅ | Use SNS separately | Native support |
-| `subscribe_messages()` | ❌ | ✅ | Use SNS separately | Native support |
+| Unified Parameter | Description | AWS SQS Mapping | Azure Service Bus Mapping | Default |
+|-------------------|-------------|-----------------|---------------------------|---------|
+| `lock_duration` | Message lock time | `visibility_timeout` | `lock_duration` | 30 seconds |
+| `retention_period` | Message retention | `message_retention_period` | `default_message_time_to_live` | 14 days |
+| `max_delivery_count` | Max delivery attempts | `max_receive_count` | `max_delivery_count` | 10 |
+| `dead_letter_config` | DLQ configuration | `redrive_policy` | Built-in DLQ | None |
+| `enable_sessions` | Ordered processing | `fifo_queue` | `requires_session` | false |
+| `duplicate_detection` | Deduplication window | `content_based_deduplication` | `requires_duplicate_detection` | false |
+| `max_queue_size` | Queue size limit | Not configurable | `max_size_in_megabytes` | Unlimited |
 
-### Parameter and Option Support
+#### Message Options (Normalized)
 
-#### Queue Creation Options
+| Unified Parameter | Description | AWS SQS Mapping | Azure Service Bus Mapping | Default |
+|-------------------|-------------|-----------------|---------------------------|---------|
+| `properties` | Message metadata | `message_attributes` | `application_properties` | {} |
+| `scheduled_time` | Delivery time | `delay_seconds` (≤15min) | `scheduled_enqueue_time` | Immediate |
+| `session_id` | Message grouping | `message_group_id` (FIFO) | `session_id` | None |
+| `correlation_id` | Request correlation | Not supported | `correlation_id` | None |
+| `reply_to` | Response destination | Not supported | `reply_to` | None |
+| `time_to_live` | Message TTL | Use queue retention | `time_to_live` | Queue default |
+| `deduplication_id` | Duplicate detection | `message_deduplication_id` | `message_id` | Auto-generated |
 
-| Option | AWS SQS | Azure Service Bus | AWS Values | Azure Values |
-|--------|---------|-------------------|------------|--------------|
-| `visibility_timeout` | ✅ | ❌ | 0-43200 seconds | Use LockDuration |
-| `lock_duration` | ❌ | ✅ | Not applicable | 5 seconds - 5 minutes |
-| `message_retention_period` | ✅ | ✅ | 60s - 1209600s | 1 minute - 14 days |
-| `max_delivery_count` | ✅ | ✅ | 1-1000 | 1-2000 |
-| `dead_letter_queue` | ✅ | ✅ | Queue ARN | Queue name |
-| `fifo_queue` | ✅ | ❌ | true/false | Use Sessions |
-| `content_based_deduplication` | ✅ | ✅ | FIFO only | Native support |
-| `duplicate_detection_window` | ✅ | ✅ | FIFO only | 20 seconds - 7 days |
-| `max_size` | ❌ | ✅ | Not configurable | 1GB - 80GB |
-| `enable_batched_operations` | ❌ | ✅ | Always enabled | true/false |
+#### Receive Options (Normalized)
 
-#### Send Message Options
-
-| Option | AWS SQS | Azure Service Bus | AWS Format | Azure Format |
-|--------|---------|-------------------|------------|--------------|
-| `attributes` | ✅ | ✅ | Key-value pairs | Properties |
-| `delay_seconds` | ✅ | ❌ | 0-900 seconds | Use scheduled_enqueue_time |
-| `scheduled_enqueue_time` | ❌ | ✅ | Not supported | ISO 8601 timestamp |
-| `message_group_id` | ✅ | ❌ | FIFO queues only | Use SessionId |
-| `session_id` | ❌ | ✅ | Not supported | String |
-| `correlation_id` | ❌ | ✅ | Not supported | String |
-| `reply_to` | ❌ | ✅ | Not supported | String |
-| `time_to_live` | ❌ | ✅ | Not supported | Duration |
-| `message_deduplication_id` | ✅ | ❌ | FIFO queues only | Use MessageId |
-
-#### Receive Message Options
-
-| Option | AWS SQS | Azure Service Bus | AWS Format | Azure Format |
-|--------|---------|-------------------|------------|--------------|
-| `max_count` | ✅ | ✅ | 1-10 | 1-32 |
-| `wait_time` | ✅ | ✅ | 0-20 seconds | 0-60 seconds |
-| `visibility_timeout` | ✅ | ❌ | 0-43200 seconds | Use lock_duration |
-| `receive_mode` | ❌ | ✅ | Always peek_lock | peek_lock/receive_delete |
-| `include_dead_letter` | ✅ | ✅ | Separate queue | Built-in flag |
+| Unified Parameter | Description | AWS SQS Mapping | Azure Service Bus Mapping | Default |
+|-------------------|-------------|-----------------|---------------------------|---------|
+| `max_count` | Max messages | `max_number_of_messages` (≤10) | `max_message_count` (≤32) | 1 |
+| `wait_time` | Polling timeout | `wait_time_seconds` (≤20) | `max_wait_time` (≤60) | 0 |
+| `lock_duration` | Processing time | `visibility_timeout` | Inherited from queue | Queue default |
+| `peek_only` | Peek without receive | Not supported (graceful) | `peek_lock` vs `receive_delete` | false |
 
 ### Service-Specific Limitations
 
@@ -309,37 +300,95 @@ list_subscription_rules(topic_name, subscription_name) -> list
 | Sessions | FIFO Message Groups | Limited functionality |
 | Scheduled Messages | DelaySeconds (limited) | Time restrictions apply |
 
-### Data Structures
+### Normalized Data Structures
 
-#### MessageResult
+#### MessageResult (Unified)
 
 ```python
 {
     "message_id": "unique-message-identifier",
     "body": "message content",
-    "attributes": {"key": "value"},
-    "properties": {"system_property": "value"},
-    "receipt_handle": "service-specific-handle",
+    "properties": {"key": "value"},           # Unified message properties
+    "session_id": "session-123",             # Unified grouping/session
+    "correlation_id": "correlation-456",     # Request correlation
+    "reply_to": "response-queue",            # Response destination
     "enqueue_time": "2024-01-01T12:00:00Z",
+    "scheduled_time": "2024-01-01T12:05:00Z", # When message becomes available
     "delivery_count": 1,
-    "expires_at": "2024-01-01T13:00:00Z",
+    "lock_expires_at": "2024-01-01T12:30:00Z", # When lock expires
+    "time_to_live": 3600,                    # Message TTL in seconds
+    "deduplication_id": "dedup-789",         # For duplicate detection
+    "receipt_handle": "service-specific-handle", # Internal use
     "success": True,
     "error": None
 }
 ```
 
-#### Queue
+#### Queue (Unified)
 
 ```python
 {
     "name": "queue-name",
+    "service_type": "aws_sqs",               # Which service backs this queue
     "url": "service-specific-url",
     "message_count": 42,
-    "visibility_timeout": 30,
+    "lock_duration": 30,                     # Unified lock/visibility timeout
+    "retention_period": 1209600,             # Message retention in seconds
     "max_delivery_count": 10,
-    "dead_letter_queue": "dlq-name",
+    "dead_letter_config": {                  # Unified DLQ configuration
+        "enabled": True,
+        "max_delivery_count": 10,
+        "queue_name": "dlq-name"
+    },
+    "enable_sessions": False,                # Unified ordered processing
+    "duplicate_detection": {                 # Unified deduplication
+        "enabled": True,
+        "window_seconds": 300
+    },
+    "max_queue_size": 1073741824,           # Queue size in bytes (unlimited = -1)
     "created_time": "2024-01-01T10:00:00Z",
-    "attributes": {"custom": "values"}
+    "modified_time": "2024-01-01T10:00:00Z"
+}
+```
+
+#### Topic (Azure Service Bus Only)
+
+```python
+{
+    "name": "topic-name",
+    "service_type": "azure_servicebus",
+    "subscription_count": 3,
+    "message_count": 156,
+    "size_in_bytes": 1048576,
+    "max_size": 1073741824,
+    "retention_period": 1209600,
+    "duplicate_detection": {
+        "enabled": True,
+        "window_seconds": 300
+    },
+    "created_time": "2024-01-01T10:00:00Z",
+    "modified_time": "2024-01-01T10:00:00Z"
+}
+```
+
+#### Subscription (Azure Service Bus Only)
+
+```python
+{
+    "name": "subscription-name",
+    "topic_name": "topic-name",
+    "message_count": 23,
+    "dead_letter_message_count": 1,
+    "lock_duration": 60,
+    "max_delivery_count": 10,
+    "filters": [
+        {
+            "name": "priority-filter",
+            "expression": "priority = 'high'",
+            "type": "sql_filter"
+        }
+    ],
+    "created_time": "2024-01-01T10:00:00Z"
 }
 ```
 
@@ -386,31 +435,34 @@ EnableDeadLetterQueue    *ConfigOption[bool] // Enable dead letter queue support
 
 ## Complete Usage Examples
 
-### Basic Queue Operations
+### Unified Queue Operations
 
 ```python
 load("mq", "connect")
 
 def main():
-    # Connect to AWS SQS
+    # Connect to AWS SQS with unified configuration
     client = connect(
         service_type="aws_sqs",
         aws_region="us-west-2"
     )
     
-    # Create a queue
+    # Create a queue with unified parameters
     queue = client.create_queue("my-work-queue", {
-        "visibility_timeout": 60,
+        "lock_duration": 60,                    # Unified visibility/lock timeout
         "max_delivery_count": 5,
-        "dead_letter_queue": "my-dlq"
+        "dead_letter_config": {                 # Unified DLQ configuration
+            "enabled": True,
+            "queue_name": "my-dlq"
+        }
     })
     
     if queue == None:
         fail("Failed to create queue")
     
-    # Send a message
+    # Send a message with unified properties
     result = client.send_message("my-work-queue", "Hello, World!", {
-        "attributes": {
+        "properties": {                         # Unified message properties
             "priority": "high",
             "sender": "worker-1"
         }
@@ -418,14 +470,15 @@ def main():
     
     print("Message sent with ID: {}".format(result.message_id))
     
-    # Receive messages
+    # Receive messages with unified options
     messages = client.receive_messages("my-work-queue", max_count=5, {
-        "wait_time": 20,  # Long polling
-        "visibility_timeout": 30
+        "wait_time": 20,                       # Long polling (auto-adapted)
+        "lock_duration": 30                    # Unified lock duration
     })
     
     for message in messages:
         print("Processing message: {}".format(message.body))
+        print("Message properties: {}".format(message.properties))
         
         # Process the message...
         success = process_message(message)
@@ -434,8 +487,9 @@ def main():
             # Delete message after successful processing
             client.delete_message("my-work-queue", message.message_id)
         else:
-            # Let it become visible again for retry
-            print("Message processing failed, will retry")
+            # Extend lock duration for retry
+            client.extend_message_lock("my-work-queue", message.message_id, 60)
+            print("Extended lock for message {}, will retry".format(message.message_id))
 
 def process_message(message):
     # Simulate message processing
@@ -445,10 +499,10 @@ def process_message(message):
 main()
 ```
 
-### Azure Service Bus with Topics
+### Unified Pub/Sub with Topics (Azure Service Bus)
 
 ```python
-load("mq", "connect")
+load("mq", "connect", "check_feature_support")
 
 def main():
     # Connect to Azure Service Bus
@@ -457,22 +511,39 @@ def main():
         connection_string="Endpoint=sb://namespace.servicebus.windows.net/;..."
     )
     
-    # Create topic and subscriptions
+    # Check if topics are supported
+    if not check_feature_support(client, "topics"):
+        fail("Topics not supported with this service type")
+    
+    # Create topic with unified configuration
     topic = client.create_topic("order-events", {
-        "max_size": "1GB",
-        "ttl": 86400  # 24 hours
+        "max_queue_size": 1073741824,          # 1GB in bytes
+        "retention_period": 86400,             # 24 hours
+        "duplicate_detection": {
+            "enabled": True,
+            "window_seconds": 300
+        }
     })
     
-    # Create subscriptions with filters
+    # Create subscriptions with unified filters
     client.create_subscription("order-events", "payment-processor", {
-        "filter": "event_type = 'payment'"
+        "lock_duration": 60,
+        "max_delivery_count": 5
     })
     
     client.create_subscription("order-events", "inventory-manager", {
-        "filter": "event_type IN ('order_created', 'order_cancelled')"
+        "lock_duration": 60,
+        "max_delivery_count": 3
     })
     
-    # Publish messages
+    # Add filters using unified API
+    client.add_subscription_filter("order-events", "payment-processor", 
+                                  "payment-filter", "event_type = 'payment'")
+    
+    client.add_subscription_filter("order-events", "inventory-manager",
+                                  "inventory-filter", "event_type IN ('order_created', 'order_cancelled')")
+    
+    # Publish messages with unified properties
     events = [
         {"event_type": "payment", "order_id": "12345", "amount": 99.99},
         {"event_type": "order_created", "order_id": "12346", "items": 3},
@@ -481,18 +552,37 @@ def main():
     
     for event in events:
         result = client.publish_message("order-events", encode_json(event), {
-            "properties": {
+            "properties": {                     # Unified properties
                 "event_type": event["event_type"],
                 "timestamp": get_current_time()
-            }
+            },
+            "correlation_id": "batch-001",      # Unified correlation
+            "session_id": event["order_id"]     # Unified session grouping
         })
         print("Published event {} with ID: {}".format(event["event_type"], result.message_id))
     
-    # Process subscription messages
-    payment_messages = client.subscribe_messages("order-events", "payment-processor", max_count=10)
+    # Process subscription messages with unified API
+    payment_messages = client.subscribe_messages("order-events", "payment-processor", 
+                                                max_count=10, {
+                                                    "wait_time": 30,
+                                                    "lock_duration": 60
+                                                })
+    
     for msg in payment_messages:
         print("Payment processor received: {}".format(msg.body))
-        client.delete_message("order-events", msg.message_id, {"subscription": "payment-processor"})
+        print("Session ID: {}".format(msg.session_id))
+        print("Correlation ID: {}".format(msg.correlation_id))
+        
+        # Process and delete with unified API
+        if process_event(msg):
+            client.delete_message("order-events", msg.message_id)
+        else:
+            # Extend lock for retry
+            client.extend_message_lock("order-events", msg.message_id, 60)
+
+def process_event(message):
+    # Simulate event processing
+    return True
 
 def encode_json(obj):
     # Simple JSON encoding (would use json module in real scenario)
@@ -954,6 +1044,73 @@ require (
     github.com/starpkg/base v0.1.0
 )
 ```
+
+## API Normalization Strategy Summary
+
+### Essential Unified Concepts
+
+The `mq` module implements the following key normalizations to provide a consistent experience:
+
+#### 1. Message Lock Management (Most Important)
+- **Unified Parameter**: `lock_duration` 
+- **AWS SQS**: Maps to `visibility_timeout`
+- **Azure Service Bus**: Maps to `lock_duration`
+- **API Functions**: `extend_message_lock()`, `release_message_lock()`
+- **Deprecates**: `change_message_visibility()`, `extend_message_visibility()`
+
+#### 2. Message Scheduling
+- **Unified Parameter**: `scheduled_time` (ISO 8601 timestamp)
+- **AWS SQS**: Converts to `delay_seconds` (warns if >15 minutes)
+- **Azure Service Bus**: Maps to `scheduled_enqueue_time`
+- **API Function**: `send_scheduled_message()`
+- **Deprecates**: `delay_seconds`, `scheduled_enqueue_time`
+
+#### 3. Message Properties
+- **Unified Parameter**: `properties` (dict)
+- **AWS SQS**: Maps to `message_attributes`
+- **Azure Service Bus**: Maps to `application_properties`
+- **Deprecates**: `attributes`, `message_attributes`
+
+#### 4. Message Grouping/Sessions
+- **Unified Parameter**: `session_id`
+- **AWS SQS**: Maps to `message_group_id` (FIFO queues only)
+- **Azure Service Bus**: Maps to `session_id`
+- **Deprecates**: `message_group_id`
+
+#### 5. Dead Letter Queue Configuration
+- **Unified Parameter**: `dead_letter_config` (object)
+- **AWS SQS**: Creates separate DLQ + redrive policy
+- **Azure Service Bus**: Configures built-in dead letter subqueue
+- **Deprecates**: Service-specific DLQ configurations
+
+#### 6. Batch Operations
+- **Unified Behavior**: Automatic batch size adaptation
+- **AWS SQS**: Auto-splits to batches of ≤10 messages
+- **Azure Service Bus**: Auto-splits to batches of ≤100 messages
+- **API Function**: `send_messages_batch()`, `delete_messages()`
+- **User Experience**: Transparent handling of service limits
+
+### Graceful Degradation Patterns
+
+| Feature | AWS SQS Fallback | Azure Service Bus Fallback |
+|---------|------------------|----------------------------|
+| `peek_messages()` | Returns empty list + warning | Native support |
+| `cancel_scheduled_message()` | fail() with explanation | Native support |
+| Topic operations | fail() with SNS guidance | Native support |
+| `correlation_id` | Ignored (logs warning) | Native support |
+| `reply_to` | Ignored (logs warning) | Native support |
+
+### Removed/Deprecated Features
+
+To achieve normalization, the following service-specific functions are **removed**:
+
+- ❌ `change_message_visibility()` → Use `extend_message_lock()`
+- ❌ `extend_message_visibility()` → Use `extend_message_lock()`
+- ❌ `get_queue_attributes()` → Use `get_queue_info()`
+- ❌ `set_queue_attributes()` → Use unified parameters in `create_queue()`
+- ❌ `get_queue_url()` → Service-specific, use `get_queue_info()` for details
+- ❌ `schedule_message()` → Use `send_scheduled_message()`
+- ❌ `requeue_dead_letter_message()` → Use `reprocess_dead_letter_message()`
 
 ## Development Plan
 
