@@ -26,9 +26,11 @@ Key differentiators include automatic retry handling, unified dead letter queue 
 
 - **No Classes → Service Factory Pattern**: Use `connect()` function to create service-specific clients with method-like behavior through closures
 - **No f-strings → Format Method**: All string formatting uses `"template {}".format(value)` instead of f-string syntax
-- **No try/except → fail() Function**: Error conditions terminate script execution with descriptive messages via `fail()`
+- **No try/except → Conditional Checks**: Use `check_feature_support()` and conditional logic instead of exception handling
 - **No is/is not → Equality Comparison**: Use `== None` and `!= None` for null checks instead of identity comparisons
-- **No While Loops → For Range**: Use `range()` with for loops for retry logic and batch operations
+- **No While Loops → Bounded For Loops**: Use `for i in range(n):` with break conditions for iterative processing
+- **No Import Statements → Built-in Functions**: Use runtime-provided functions instead of Python's import system
+- **No Random Module → Deterministic Logic**: Use predictable logic instead of random number generation
 - **Immutable After Load → Configuration at Connect**: All service configuration happens during connection establishment
 
 ## API Design
@@ -633,13 +635,14 @@ def main():
     
     print("Successfully sent {} out of {} messages".format(total_sent, len(messages)))
     
-    # Batch receive and process
-    while True:
+    # Batch receive and process (using for loop with range for bounded processing)
+    for batch_round in range(100):  # Process up to 100 batches
         messages = client.receive_messages("batch-queue", max_count=10, {
             "wait_time": 5  # Short polling for batch processing
         })
         
         if len(messages) == 0:
+            print("No more messages to process")
             break
         
         # Process messages
@@ -679,22 +682,20 @@ def main():
     # Create the dead letter queue
     dlq = client.create_queue("processing-dlq")
     
-    # Process main queue
-    while True:
+    # Process main queue (using for loop with range for bounded processing)
+    for processing_round in range(50):  # Process up to 50 rounds
         messages = client.receive_messages("processing-queue", max_count=5)
         if len(messages) == 0:
+            print("No more messages to process")
             break
         
         for msg in messages:
-            try:
-                success = process_with_potential_failure(msg)
-                if success:
-                    client.delete_message("processing-queue", msg.message_id)
-                else:
-                    # Let it retry (will eventually go to DLQ)
-                    print("Processing failed for message {}, will retry".format(msg.message_id))
-            except Exception as e:
-                print("Error processing message: {}".format(str(e)))
+            success = process_with_potential_failure(msg)
+            if success:
+                client.delete_message("processing-queue", msg.message_id)
+            else:
+                # Let it retry (will eventually go to DLQ)
+                print("Processing failed for message {}, will retry".format(msg.message_id))
     
     # Handle dead letter messages
     dead_messages = client.get_dead_letter_messages("processing-queue", max_count=10)
@@ -716,8 +717,9 @@ def main():
 
 def process_with_potential_failure(message):
     # Simulate processing that might fail
-    import random
-    return random.random() > 0.3  # 70% success rate
+    # Note: Starlark doesn't have 'import random', this is just for example
+    # In real usage, you would implement your actual processing logic
+    return True  # Simplified for Starlark compatibility
 
 def should_requeue(message):
     # Simple logic for requeuing
@@ -782,27 +784,27 @@ def handle_service_differences(aws_client, azure_client):
             aws_client.delete_message("test-queue", msg.message_id)
     
     # Azure Service Bus: Use lock duration and peek (not available in AWS)
-    try:
+    # Note: Starlark doesn't have try/except, use conditional checks instead
+    
+    # Check if peek is supported before calling
+    if check_feature_support(azure_client, "peek_messages"):
         # Peek messages without receiving them (Azure only)
         peeked = azure_client.peek_messages("test-queue", max_count=5)
         print("Peeked {} messages from Azure queue".format(len(peeked)))
+    
+    # Receive with lock duration (Azure equivalent of visibility timeout)
+    azure_messages = azure_client.receive_messages("test-queue", max_count=5, {
+        "wait_time": 30,     # Azure supports longer wait times
+        "receive_mode": "peek_lock"
+    })
+    
+    for msg in azure_messages:
+        # Process message with session support (Azure only)
+        if msg.session_id != None:
+            print("Processing session message: {}".format(msg.session_id))
         
-        # Receive with lock duration (Azure equivalent of visibility timeout)
-        azure_messages = azure_client.receive_messages("test-queue", max_count=5, {
-            "wait_time": 30,     # Azure supports longer wait times
-            "receive_mode": "peek_lock"
-        })
-        
-        for msg in azure_messages:
-            # Process message with session support (Azure only)
-            if msg.session_id != None:
-                print("Processing session message: {}".format(msg.session_id))
-            
-            if process_message(msg):
-                azure_client.delete_message("test-queue", msg.message_id)
-                
-    except Exception as e:
-        print("Azure-specific operation failed: {}".format(str(e)))
+        if process_message(msg):
+            azure_client.delete_message("test-queue", msg.message_id)
 
 def forward_messages_with_feature_detection(source_client, dest_client):
     """Forward messages between services handling different capabilities"""
