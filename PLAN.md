@@ -66,21 +66,137 @@ The **MQ** module provides a unified, simple, and intuitive interface for intera
 - **Subscription Rules**: Route messages based on properties
 - **Multiple Subscriptions**: Multiple consumers per topic
 
+## Provider Compatibility Overview
+
+The MQ module provides a unified API across AWS SQS and Azure Service Bus, but not all features are available on both providers. The tables below show what's supported where.
+
+### Function Support by Provider
+
+| Function | AWS SQS | Azure Service Bus | Notes |
+|----------|---------|-------------------|-------|
+| `configure()` | ✅ | ✅ | Different config parameters |
+| `send()` | ✅ | ✅ | Some parameters provider-specific |
+| `receive()` | ✅ | ✅ | Different polling mechanisms |
+| `delete()` | ✅ | ✅ | Different handle formats |
+| `peek()` | ✅ | ✅ | Implementation differs |
+| `send_batch()` | ✅ | ✅ | Different batch limits |
+| `delete_batch()` | ✅ | ✅ | - |
+| `create_queue()` | ✅ | ✅ | Different queue properties |
+| `delete_queue()` | ✅ | ✅ | - |
+| `list_queues()` | ✅ | ✅ | - |
+| `get_queue_attributes()` | ✅ | ✅ | Different attribute sets |
+| `purge_queue()` | ✅ | ✅ | - |
+| `change_message_visibility()` | ✅ | ✅ | - |
+| `create_topic()` | ❌ | ✅ | SQS doesn't support topics |
+| `create_subscription()` | ❌ | ✅ | SQS doesn't support subscriptions |
+| `delete_topic()` | ❌ | ✅ | SQS doesn't support topics |
+| `delete_subscription()` | ❌ | ✅ | SQS doesn't support subscriptions |
+| `list_topics()` | ❌ | ✅ | SQS doesn't support topics |
+| `list_subscriptions()` | ❌ | ✅ | SQS doesn't support subscriptions |
+| `get_dead_letter_messages()` | ✅ | ✅ | Different implementations |
+| `redrive_messages()` | ✅ | ✅ | Different redrive mechanisms |
+
+### Parameter Support by Function
+
+#### `send()` Function Parameters
+
+| Parameter | AWS SQS | Azure Service Bus | Notes |
+|-----------|---------|-------------------|-------|
+| `queue_name` | ✅ | ✅ | Queue or topic name |
+| `message` | ✅ | ✅ | Message body |
+| `attributes` | ✅ | ✅ | Different attribute types |
+| `delay_seconds` | ✅ | ❌ | Use `scheduled_time` for Azure |
+| `message_group_id` | ✅ (FIFO only) | ❌ | Use `session_id` for Azure |
+| `message_deduplication_id` | ✅ (FIFO only) | ❌ | Azure has built-in deduplication |
+| `scheduled_time` | ❌ | ✅ | Use `delay_seconds` for AWS |
+| `session_id` | ❌ | ✅ | Use `message_group_id` for AWS FIFO |
+| `content_type` | ❌ | ✅ | AWS uses attributes |
+| `correlation_id` | ❌ | ✅ | AWS uses attributes |
+| `reply_to` | ❌ | ✅ | AWS uses attributes |
+| `time_to_live` | ❌ | ✅ | AWS uses queue settings |
+| `priority` | ❌ | ✅ | AWS doesn't support priorities |
+| `label` | ❌ | ✅ | Azure-specific feature |
+
+#### `receive()` Function Parameters
+
+| Parameter | AWS SQS | Azure Service Bus | Notes |
+|-----------|---------|-------------------|-------|
+| `queue_name` | ✅ | ✅ | Queue or subscription name |
+| `max_messages` | ✅ (1-10) | ✅ (1-256) | Different limits |
+| `wait_time_seconds` | ✅ (0-20) | ✅ (0-∞) | Long polling |
+| `visibility_timeout` | ✅ | ✅ | Different default values |
+| `peek_only` | ✅ | ✅ | - |
+| `session_id` | ❌ | ✅ | Session-based receiving |
+| `receive_timeout` | ✅ | ✅ | - |
+
+#### `create_queue()` Function Parameters
+
+| Parameter | AWS SQS | Azure Service Bus | Notes |
+|-----------|---------|-------------------|-------|
+| `queue_name` | ✅ | ✅ | - |
+| `fifo` | ✅ | ❌ | Azure queues are FIFO by default |
+| `visibility_timeout` | ✅ | ✅ | Different ranges |
+| `message_retention_period` | ✅ | ✅ | Different limits |
+| `max_message_size` | ✅ | ✅ | Different limits |
+| `dead_letter_queue` | ✅ | ✅ | Different configuration |
+| `max_receive_count` | ✅ | ✅ | - |
+| `duplicate_detection` | ❌ | ✅ | SQS FIFO has built-in dedup |
+| `requires_session` | ❌ | ✅ | Azure-specific feature |
+
+### Provider-Specific Limitations
+
+#### AWS SQS Limitations
+
+| Feature | Limitation | Workaround |
+|---------|------------|------------|
+| Topics/Subscriptions | Not supported | Use separate queues or SNS+SQS |
+| Message Priority | Not supported | Use separate queues by priority |
+| Scheduled Messages | Max 15 minutes delay | Use external scheduler for longer delays |
+| Message Size | 256KB max | Use S3 for large payloads |
+| Batch Size | 10 messages max | Process in multiple batches |
+| FIFO Throughput | 300 TPS with batching | Use standard queues for higher throughput |
+| Content Type | Not natively supported | Use message attributes |
+| Sessions | FIFO message groups only | Limited compared to Azure sessions |
+
+#### Azure Service Bus Limitations
+
+| Feature | Limitation | Workaround |
+|---------|------------|------------|
+| Message Group ID | Sessions only | Use sessions for ordering |
+| Delay Seconds | Use scheduled messages | Different API pattern |
+| FIFO Queues | All queues maintain order | Cannot disable ordering |
+| Queue Names | Strict naming rules | Validate names before creation |
+| Connection String | Required for auth | Cannot use individual credentials |
+| Peek Lock Duration | Different from visibility timeout | Use appropriate timeouts |
+
+### Cross-Provider Feature Mapping
+
+| AWS SQS Feature | Azure Service Bus Equivalent | Notes |
+|-----------------|------------------------------|-------|
+| Standard Queue | Queue | Basic message queue |
+| FIFO Queue | Queue with Sessions | Ordering guaranteed |
+| Message Groups | Sessions | Message grouping/ordering |
+| Dead Letter Queue | Dead Letter Queue | Failed message handling |
+| Delay Seconds | Scheduled Messages | Future delivery |
+| Long Polling | Receive with Timeout | Efficient polling |
+| Message Attributes | Message Properties | Metadata |
+| SNS + SQS | Topics + Subscriptions | Pub/sub pattern |
+
 ## Configuration Options
 
-| Option | Type | Description | Default |
-|--------|------|-------------|---------|
-| `provider` | string | Service provider ("aws_sqs", "azure_bus") | "" |
-| `connection_string` | string | Azure Service Bus connection string | "" |
-| `aws_region` | string | AWS region for SQS | "us-east-1" |
-| `aws_access_key_id` | string | AWS access key ID | "" |
-| `aws_secret_access_key` | string | AWS secret access key | "" |
-| `aws_session_token` | string | AWS session token (optional) | "" |
-| `default_timeout` | int | Default timeout in seconds | 30 |
-| `max_retries` | int | Maximum retry attempts | 3 |
-| `visibility_timeout` | int | Default visibility timeout in seconds | 30 |
-| `wait_time_seconds` | int | Long polling wait time | 0 |
-| `max_messages` | int | Maximum messages per receive operation | 10 |
+| Option | Type | Description | Default | AWS SQS | Azure Service Bus |
+|--------|------|-------------|---------|---------|-------------------|
+| `provider` | string | Service provider ("aws_sqs", "azure_bus") | "" | ✅ | ✅ |
+| `connection_string` | string | Azure Service Bus connection string | "" | ❌ | ✅ |
+| `aws_region` | string | AWS region for SQS | "us-east-1" | ✅ | ❌ |
+| `aws_access_key_id` | string | AWS access key ID | "" | ✅ | ❌ |
+| `aws_secret_access_key` | string | AWS secret access key | "" | ✅ | ❌ |
+| `aws_session_token` | string | AWS session token (optional) | "" | ✅ | ❌ |
+| `default_timeout` | int | Default timeout in seconds | 30 | ✅ | ✅ |
+| `max_retries` | int | Maximum retry attempts | 3 | ✅ | ✅ |
+| `visibility_timeout` | int | Default visibility timeout in seconds | 30 | ✅ | ✅ |
+| `wait_time_seconds` | int | Long polling wait time | 0 | ✅ | ✅ |
+| `max_messages` | int | Maximum messages per receive operation | 10 | ✅ | ✅ |
 
 ## Starlark API Design
 
@@ -120,6 +236,486 @@ list_subscriptions(topic_name) -> [string]
 change_message_visibility(queue_name, receipt_handle, timeout) -> bool
 get_dead_letter_messages(queue_name) -> [Message]
 redrive_messages(source_queue, target_queue, max_messages=10) -> int
+```
+
+## Provider-Specific Usage Guidance
+
+### Writing Cross-Provider Compatible Code
+
+When writing Starlark scripts that should work with both providers, follow these patterns:
+
+```python
+load("mq", "configure", "send", "receive", "get_config")
+load("time")
+
+def send_delayed_message(queue, message, delay_minutes=5):
+    """Send a delayed message that works on both providers"""
+    provider = get_config("provider")
+    
+    if provider == "aws_sqs":
+        # AWS SQS uses delay_seconds (max 15 minutes)
+        delay_seconds = min(delay_minutes * 60, 900)  # Cap at 15 minutes
+        return send(queue, message, delay_seconds=delay_seconds)
+    elif provider == "azure_bus":
+        # Azure Service Bus uses scheduled_time
+        future_time = time.now().add(minutes=delay_minutes)
+        return send(queue, message, scheduled_time=future_time)
+    else:
+        fail("Unsupported provider: {}".format(provider))
+
+def send_ordered_message(queue, message, group_key):
+    """Send an ordered message that works on both providers"""
+    provider = get_config("provider")
+    
+    if provider == "aws_sqs":
+        # AWS SQS FIFO queues use message_group_id
+        if not queue.endswith(".fifo"):
+            fail("AWS SQS ordered messages require FIFO queue (*.fifo)")
+        return send(queue, message, 
+                   message_group_id=group_key,
+                   message_deduplication_id="{}-{}".format(group_key, time.now().unix))
+    elif provider == "azure_bus":
+        # Azure Service Bus uses sessions
+        return send(queue, message, session_id=group_key)
+    else:
+        fail("Unsupported provider: {}".format(provider))
+
+def receive_ordered_messages(queue, group_key=None):
+    """Receive ordered messages that works on both providers"""
+    provider = get_config("provider")
+    
+    if provider == "aws_sqs":
+        # AWS SQS FIFO automatically maintains order within message groups
+        return receive(queue, max_messages=10)
+    elif provider == "azure_bus":
+        # Azure Service Bus uses session_id for ordering
+        if group_key != None:
+            return receive(queue, session_id=group_key, max_messages=10)
+        else:
+            return receive(queue, max_messages=10)
+    else:
+        fail("Unsupported provider: {}".format(provider))
+```
+
+### Provider Detection and Validation
+
+```python
+load("mq", "get_config")
+
+def validate_provider_features():
+    """Validate that required features are available on current provider"""
+    provider = get_config("provider")
+    
+    required_features = {
+        "topics": False,  # Set to True if your app needs topics
+        "priorities": False,  # Set to True if your app needs message priorities
+        "sessions": False,  # Set to True if your app needs sessions
+        "large_batches": False  # Set to True if you need >10 messages per batch
+    }
+    
+    if provider == "aws_sqs":
+        unsupported = []
+        if required_features["topics"]:
+            unsupported.append("topics (use SNS+SQS or separate queues)")
+        if required_features["priorities"]:
+            unsupported.append("message priorities (use separate queues)")
+        if required_features["sessions"]:
+            unsupported.append("sessions (use FIFO message groups)")
+        
+        if len(unsupported) > 0:
+            fail("AWS SQS doesn't support: {}".format(", ".join(unsupported)))
+    
+    elif provider == "azure_bus":
+        unsupported = []
+        if required_features["large_batches"]:
+            print("Note: Azure Service Bus supports larger batches (256 messages)")
+        
+        if len(unsupported) > 0:
+            fail("Azure Service Bus doesn't support: {}".format(", ".join(unsupported)))
+    
+    print("Provider {} supports all required features".format(provider))
+
+def get_provider_limits():
+    """Get provider-specific limits for planning"""
+    provider = get_config("provider")
+    
+    if provider == "aws_sqs":
+        return {
+            "max_message_size": 256 * 1024,  # 256KB
+            "max_batch_size": 10,
+            "max_delay_seconds": 900,  # 15 minutes
+            "max_visibility_timeout": 43200,  # 12 hours
+            "max_retention_period": 1209600  # 14 days
+        }
+    elif provider == "azure_bus":
+        return {
+            "max_message_size": 1024 * 1024,  # 1MB
+            "max_batch_size": 256,
+            "max_delay_seconds": None,  # No limit with scheduled messages
+            "max_visibility_timeout": 300,  # 5 minutes default
+            "max_retention_period": 2419200  # 28 days
+        }
+    else:
+        fail("Unknown provider: {}".format(provider))
+```
+
+### Error Handling for Provider Differences
+
+```python
+load("mq", "send", "get_config")
+
+def safe_send_with_attributes(queue, message, attributes):
+    """Safely send a message handling provider-specific attribute limitations"""
+    provider = get_config("provider")
+    
+    # Validate attributes based on provider
+    if provider == "aws_sqs":
+        # AWS SQS has specific attribute value type requirements
+        safe_attributes = {}
+        for key, value in attributes.items():
+            # AWS SQS attributes must be strings
+            safe_attributes[key] = str(value)
+        return send(queue, message, attributes=safe_attributes)
+    
+    elif provider == "azure_bus":
+        # Azure Service Bus supports more attribute types
+        return send(queue, message, attributes=attributes)
+    
+    else:
+        fail("Unsupported provider: {}".format(provider))
+
+def safe_create_queue_with_dlq(queue_name, dlq_name):
+    """Create a queue with dead letter queue support for both providers"""
+    provider = get_config("provider")
+    
+    if provider == "aws_sqs":
+        # Create DLQ first
+        dlq_result = create_queue(dlq_name)
+        # Create main queue with DLQ reference
+        return create_queue(queue_name, 
+                           dead_letter_queue=dlq_name,
+                           max_receive_count=3)
+    
+    elif provider == "azure_bus":
+        # Azure Service Bus creates DLQ automatically
+        return create_queue(queue_name, max_delivery_count=3)
+    
+    else:
+        fail("Unsupported provider: {}".format(provider))
+```
+
+### Runtime Provider Capability Checks
+
+```python
+load("mq", "get_config")
+
+def check_topic_support():
+    """Check if current provider supports topics"""
+    provider = get_config("provider")
+    return provider == "azure_bus"
+
+def check_message_priority_support():
+    """Check if current provider supports message priorities"""
+    provider = get_config("provider")
+    return provider == "azure_bus"
+
+def check_large_batch_support():
+    """Check if current provider supports large batches (>10 messages)"""
+    provider = get_config("provider")
+    return provider == "azure_bus"
+
+def get_max_batch_size():
+    """Get maximum batch size for current provider"""
+    provider = get_config("provider")
+    if provider == "aws_sqs":
+        return 10
+    elif provider == "azure_bus":
+        return 256
+    else:
+        return 1  # Conservative fallback
+
+# Usage example
+def send_large_batch_safely(queue, messages):
+    """Send a large batch of messages respecting provider limits"""
+    max_batch = get_max_batch_size()
+    
+    for i in range(0, len(messages), max_batch):
+        batch = messages[i:i + max_batch]
+        result = send_batch(queue, batch)
+        print("Sent batch {}: {} messages".format(i // max_batch + 1, len(batch)))
+```
+
+### Migration Between Providers
+
+The MQ module supports migrating messages and configurations between AWS SQS and Azure Service Bus:
+
+```python
+# Example: Migrating from AWS SQS to Azure Service Bus
+load("mq", "configure", "send", "receive", "delete", "send_batch")
+load("time")
+
+def migrate_queue_messages(source_provider, target_provider, queue_name, target_queue=None):
+    """Migrate messages from one provider to another"""
+    
+    if target_queue == None:
+        target_queue = queue_name
+    
+    print("Starting migration from {} to {}".format(source_provider, target_provider))
+    
+    # Configure source provider
+    configure(source_provider)
+    
+    # Receive all messages from source
+    all_messages = []
+    while True:
+        messages = receive(queue_name, max_messages=10, wait_time_seconds=5)
+        if len(messages) == 0:
+            break
+        
+        for msg in messages:
+            # Transform message for target provider
+            transformed = transform_message_for_provider(msg, target_provider)
+            all_messages.append(transformed)
+            
+            # Delete from source (commit the migration)
+            delete(queue_name, msg.receipt_handle)
+        
+        print("Migrated {} messages...".format(len(all_messages)))
+    
+    # Configure target provider
+    configure(target_provider)
+    
+    # Send messages to target
+    batch_size = 10 if target_provider == "aws_sqs" else 100
+    for i in range(0, len(all_messages), batch_size):
+        batch = all_messages[i:i + batch_size]
+        result = send_batch(target_queue, batch)
+        print("Sent batch {}: {} successful, {} failed".format(
+            i // batch_size + 1, 
+            len(result.successful), 
+            len(result.failed)
+        ))
+    
+    print("Migration completed: {} messages migrated".format(len(all_messages)))
+
+def transform_message_for_provider(msg, target_provider):
+    """Transform message attributes for target provider compatibility"""
+    
+    if target_provider == "aws_sqs":
+        # Transform Azure Service Bus message to AWS SQS format
+        transformed = {
+            "body": msg.body,
+            "attributes": {}
+        }
+        
+        # Map Azure-specific fields to attributes
+        if hasattr(msg, "content_type") and msg.content_type != None:
+            transformed["attributes"]["content_type"] = msg.content_type
+        if hasattr(msg, "correlation_id") and msg.correlation_id != None:
+            transformed["attributes"]["correlation_id"] = msg.correlation_id
+        if hasattr(msg, "session_id") and msg.session_id != None:
+            transformed["attributes"]["session_id"] = msg.session_id
+        
+        # Copy existing attributes
+        for key, value in msg.attributes.items():
+            transformed["attributes"][key] = str(value)  # AWS requires string values
+        
+        return transformed
+    
+    elif target_provider == "azure_bus":
+        # Transform AWS SQS message to Azure Service Bus format
+        transformed = {
+            "body": msg.body,
+            "attributes": {}
+        }
+        
+        # Extract Azure-specific fields from attributes
+        attrs = dict(msg.attributes)
+        content_type = attrs.pop("content_type", None)
+        correlation_id = attrs.pop("correlation_id", None)
+        session_id = attrs.pop("session_id", None)
+        
+        if content_type != None:
+            transformed["content_type"] = content_type
+        if correlation_id != None:
+            transformed["correlation_id"] = correlation_id
+        if session_id != None:
+            transformed["session_id"] = session_id
+        
+        # Copy remaining attributes
+        transformed["attributes"] = attrs
+        
+        return transformed
+    
+    else:
+        fail("Unsupported target provider: {}".format(target_provider))
+
+def migrate_queue_configuration(source_provider, target_provider, queue_configs):
+    """Migrate queue configurations between providers"""
+    
+    migrated_configs = []
+    
+    for config in queue_configs:
+        queue_name = config["name"]
+        
+        if source_provider == "aws_sqs" and target_provider == "azure_bus":
+            # AWS SQS to Azure Service Bus migration
+            azure_config = {
+                "name": queue_name,
+                "max_delivery_count": config.get("max_receive_count", 3),
+                "duplicate_detection": True if queue_name.endswith(".fifo") else False
+            }
+            
+            # Map retention periods (different units)
+            if "message_retention_period" in config:
+                azure_config["default_message_ttl"] = config["message_retention_period"]
+            
+            migrated_configs.append(azure_config)
+            
+        elif source_provider == "azure_bus" and target_provider == "aws_sqs":
+            # Azure Service Bus to AWS SQS migration
+            aws_config = {
+                "name": queue_name,
+                "max_receive_count": config.get("max_delivery_count", 3),
+                "fifo": config.get("duplicate_detection", False)
+            }
+            
+            # Ensure FIFO queue naming
+            if aws_config["fifo"] and not queue_name.endswith(".fifo"):
+                aws_config["name"] = queue_name + ".fifo"
+            
+            # Map retention periods
+            if "default_message_ttl" in config:
+                aws_config["message_retention_period"] = config["default_message_ttl"]
+            
+            migrated_configs.append(aws_config)
+    
+    return migrated_configs
+```
+
+### Provider-Specific Best Practices
+
+#### AWS SQS Best Practices
+
+```python
+# 1. Use FIFO queues for ordering
+def create_ordered_queue_aws(queue_name):
+    """Create an ordered queue on AWS SQS"""
+    if not queue_name.endswith(".fifo"):
+        queue_name = queue_name + ".fifo"
+    
+    return create_queue(
+        queue_name=queue_name,
+        fifo=True,
+        visibility_timeout=60,
+        dead_letter_queue=queue_name.replace(".fifo", "-dlq.fifo"),
+        max_receive_count=3
+    )
+
+# 2. Optimize for throughput with batching
+def high_throughput_send_aws(queue_name, messages):
+    """Send messages optimized for AWS SQS throughput"""
+    
+    # AWS SQS batch limit is 10 messages
+    batch_size = 10
+    
+    for i in range(0, len(messages), batch_size):
+        batch = messages[i:i + batch_size]
+        
+        # Add deduplication IDs for FIFO queues
+        if queue_name.endswith(".fifo"):
+            for j, msg in enumerate(batch):
+                if "message_deduplication_id" not in msg:
+                    msg["message_deduplication_id"] = "batch-{}-{}".format(i, j)
+        
+        result = send_batch(queue_name, batch)
+        print("AWS batch {}: {} sent".format(i // batch_size + 1, len(result.successful)))
+
+# 3. Handle long polling efficiently
+def poll_efficiently_aws(queue_name, process_function):
+    """Efficiently poll AWS SQS with long polling"""
+    
+    while True:
+        messages = receive(
+            queue_name=queue_name,
+            max_messages=10,
+            wait_time_seconds=20,  # Long polling
+            visibility_timeout=300  # 5 minutes processing time
+        )
+        
+        if len(messages) == 0:
+            continue
+        
+        for msg in messages:
+            try:
+                process_function(msg)
+                delete(queue_name, msg.receipt_handle)
+            except Exception as e:
+                print("Processing failed: {}".format(str(e)))
+                # Message will become visible again after visibility timeout
+```
+
+#### Azure Service Bus Best Practices
+
+```python
+# 1. Use sessions for message ordering
+def create_ordered_queue_azure(queue_name):
+    """Create an ordered queue on Azure Service Bus"""
+    return create_queue(
+        queue_name=queue_name,
+        requires_session=True,
+        max_delivery_count=5,
+        duplicate_detection=True
+    )
+
+# 2. Optimize large batches
+def high_throughput_send_azure(queue_name, messages):
+    """Send messages optimized for Azure Service Bus throughput"""
+    
+    # Azure Service Bus supports larger batches
+    batch_size = 100
+    
+    for i in range(0, len(messages), batch_size):
+        batch = messages[i:i + batch_size]
+        result = send_batch(queue_name, batch)
+        print("Azure batch {}: {} sent".format(i // batch_size + 1, len(result.successful)))
+
+# 3. Use topics for pub/sub patterns
+def setup_notification_system_azure():
+    """Setup a notification system using Azure Service Bus topics"""
+    
+    # Create topic
+    create_topic("notifications", max_size_in_mb=1024)
+    
+    # Create filtered subscriptions
+    create_subscription(
+        topic_name="notifications",
+        subscription_name="high-priority",
+        filter_expression="priority IN ('high', 'critical')"
+    )
+    
+    create_subscription(
+        topic_name="notifications", 
+        subscription_name="email-notifications",
+        filter_expression="type = 'email'"
+    )
+    
+    create_subscription(
+        topic_name="notifications",
+        subscription_name="audit-log"  # No filter = all messages
+    )
+
+# 4. Handle scheduled messages
+def schedule_message_azure(queue_name, message, delay_hours):
+    """Schedule a message for future delivery on Azure Service Bus"""
+    
+    future_time = time.now().add(hours=delay_hours)
+    return send(
+        queue_name=queue_name,
+        message=message,
+        scheduled_time=future_time,
+        attributes={"scheduled_at": time.now().format(time.RFC3339)}
+    )
 ```
 
 ### Core Functions with Complete Examples
