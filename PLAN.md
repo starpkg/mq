@@ -1,17 +1,27 @@
-# 📨 mq - Unified Message Queue Interface for Starlark
+# 📨 MQ Module for Starlark
 
-**Module Name**: `mq`  
-**Emoji**: 📨  
-**Description**: Unified interface for AWS SQS and Azure Service Bus message queue operations  
-**Tagline**: "Queue it up, deliver it right - unified message queue operations made simple"
+[![Go Reference](https://pkg.go.dev/badge/github.com/starpkg/mq.svg)](https://pkg.go.dev/github.com/starpkg/mq)
+[![Go Report Card](https://goreportcard.com/badge/github.com/starpkg/mq)](https://goreportcard.com/report/github.com/starpkg/mq)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-## Executive Summary
+**Unified message queue operations for Starlark scripts - seamlessly connect to AWS SQS and Azure Service Bus!**
 
-The `mq` module provides Starlark scripts with a unified, high-performance interface for interacting with cloud-based message queue services. By abstracting the complexities of AWS SQS and Azure Service Bus behind a consistent API, developers can build portable message-driven applications without vendor lock-in.
+The MQ module provides a comprehensive, easy-to-use interface for interacting with cloud message queue services from Starlark scripts. It supports Amazon SQS and Azure Service Bus with advanced features like batch operations, dead letter queue management, and unified message handling across different cloud providers.
 
-This module addresses the growing need for reliable, scalable message processing in distributed systems while maintaining the simplicity and safety that Starlark provides. Whether you're building event-driven architectures, implementing work queues, or managing pub/sub messaging patterns, the `mq` module delivers enterprise-grade messaging capabilities with minimal configuration overhead.
+## ✨ Features
 
-Key differentiators include automatic retry handling, unified dead letter queue management, cross-platform message attribute handling, and built-in support for both point-to-point and publish/subscribe messaging patterns. The module leverages Go's concurrency features for optimal performance while maintaining Starlark's deterministic execution model.
+- **🌐 Universal Compatibility**: Works with AWS SQS and Azure Service Bus with automatic service detection
+- **🔒 Secure Configuration**: Module-level configuration with secret handling and environment variable support
+- **📨 Unified Queue Operations**: Create, delete, list queues with consistent API across cloud providers
+- **💌 Advanced Message Operations**: Send, receive, delete messages with unified parameter handling
+- **⚡ High Performance**: Intelligent batch operations with auto-adaptation to service limits
+- **🔄 Smart Retry Logic**: Automatic retry handling with exponential backoff for resilient operations
+- **💀 Dead Letter Queue Support**: Complete DLQ management with unified interface across providers
+- **🏷️ Message Properties**: Full support for message attributes, scheduling, and session handling
+- **🔐 Message Lock Management**: Unified visibility timeout and lock duration handling
+- **🛠️ Rich Utility Functions**: Service detection, feature validation, and configuration helpers
+- **🧠 Intelligent Adaptation**: Graceful degradation for service-specific features and limitations
+- **🎯 Starlark Native**: Designed specifically for Starlark with proper error handling and type safety
 
 ## Core Design Principles
 
@@ -37,22 +47,22 @@ Key differentiators include automatic retry handling, unified dead letter queue 
 
 ### Service Compatibility Overview
 
-The `mq` module provides a unified interface, but not all features are available on both services. The tables below show exactly what's supported where.
+The `mq` module provides a unified interface for queue operations across AWS SQS and Azure Service Bus. The table below shows what's supported on each service.
 
 #### Core Features Compatibility Matrix
 
 | Feature Category | AWS SQS | Azure Service Bus | Notes |
 |------------------|---------|-------------------|-------|
-| **Basic Queues** | ✅ | ✅ | Full support on both |
-| **FIFO Queues** | ✅ | ❌ | SQS only - use Sessions in Azure |
-| **Topics/Subscriptions** | ❌ | ✅ | Azure Service Bus only |
+| **Standard Queues** | ✅ | ✅ | Full support on both services |
+| **FIFO Queues** | ✅ | ❌ | SQS only - use sessions in Azure for ordering |
 | **Dead Letter Queues** | ✅ | ✅ | Different configuration methods |
 | **Message Attributes** | ✅ | ✅ | Different limits and types |
-| **Batch Operations** | ✅ (max 10) | ✅ (max 100) | Different batch sizes |
+| **Batch Operations** | ✅ (max 10) | ✅ (max 100) | Auto-adaptation to service limits |
 | **Long Polling** | ✅ | ✅ | Different parameter names |
-| **Delayed Messages** | ✅ | ✅ | Different mechanisms |
+| **Delayed Messages** | ✅ (≤15min) | ✅ | Different mechanisms and limits |
 | **Message Sessions** | ❌ | ✅ | Azure Service Bus only |
 | **Duplicate Detection** | ✅ (FIFO only) | ✅ | Different implementations |
+| **Peek Messages** | ❌ | ✅ | Azure only - AWS returns local error |
 
 ## Unified API Design
 
@@ -76,18 +86,19 @@ The module normalizes different service concepts into unified abstractions:
 ```python
 # Primary connection function - auto-detects service type
 connect(
-    service_type="auto",     # "aws_sqs", "azure_servicebus", "auto"
-    connection_string=None,  # Azure Service Bus connection string
-    aws_region=None,         # AWS region for SQS
-    aws_access_key=None,     # AWS access key ID
-    aws_secret_key=None,     # AWS secret access key
-    timeout=30,              # Connection timeout in seconds
-    max_retries=3            # Maximum retry attempts
+    service_type="auto",         # "aws_sqs", "azure_servicebus", "auto", or None
+    connection_string=None,      # Azure Service Bus connection string
+    aws_region=None,             # AWS region for SQS
+    aws_access_key=None,         # AWS access key ID
+    aws_secret_key=None,         # AWS secret access key
+    timeout=30,                  # Connection timeout in seconds
+    max_retries=3                # Maximum retry attempts
 ) -> Client
 
 # Utility functions
 get_supported_services() -> list    # Returns ["aws_sqs", "azure_servicebus"]
-get_client_info(client) -> dict    # Returns client connection details
+get_client_info(client) -> dict     # Returns client connection details
+check_feature_support(client, feature_name) -> bool  # Check if feature is supported
 ```
 
 ### Unified Client API
@@ -96,72 +107,47 @@ get_client_info(client) -> dict    # Returns client connection details
 
 ```python
 # Queue management
-create_queue(name, **options) -> Queue
+create_queue(name, lock_duration=30, retention_period=1209600, max_delivery_count=10, 
+             dead_letter_config=None, enable_sessions=False, duplicate_detection=False) -> Queue
 delete_queue(name) -> bool
 list_queues(prefix="") -> list
 get_queue(name) -> Queue
-queue_exists(name) -> bool
-purge_queue(name) -> bool
-
-# Queue information
-get_queue_info(name) -> dict    # Unified queue information
+exists(name) -> bool
+purge(name) -> bool
+get_info(name) -> dict    # Unified queue information
 ```
 
 #### Unified Message Operations
 
 ```python
 # Core message operations
-send_message(queue_name, body, **options) -> MessageResult
-receive_messages(queue_name, max_count=1, **options) -> list
-delete_message(queue_name, message_id) -> bool
-delete_messages(queue_name, message_ids) -> list  # Batch delete
+send(queue_name, body, properties=None, scheduled_time=None, session_id=None, 
+     correlation_id=None, reply_to=None, time_to_live=None, message_id=None) -> MessageResult
+receive(queue_name, max_count=1, wait_time=0, lock_duration=None, peek_only=False) -> list
+delete(queue_name, message_ids) -> list  # Accepts single ID string or list of IDs
 
 # Message lock management (unified visibility/lock concept)
-extend_message_lock(queue_name, message_id, lock_duration) -> bool
-release_message_lock(queue_name, message_id) -> bool
+lock(queue_name, message_id, lock_duration) -> bool
+unlock(queue_name, message_id) -> bool
 
 # Smart batch operations (auto-adapts to service limits)
-send_messages_batch(queue_name, messages) -> list  # Auto-handles batch size limits
+batch_send(queue_name, messages) -> list  # Auto-handles batch size limits
 
 # Message inspection (available when supported)
-peek_messages(queue_name, max_count=1) -> list    # Graceful fallback on AWS SQS
+peek(queue_name, max_count=1) -> list    # Returns error on AWS SQS
 ```
 
-#### Unified Scheduling and DLQ
+#### Unified Scheduling and Dead Letter Queue
 
 ```python
 # Message scheduling (unified approach)
-send_scheduled_message(queue_name, body, scheduled_time, **options) -> MessageResult
-cancel_scheduled_message(queue_name, message_id) -> bool  # Where supported
+schedule(queue_name, body, scheduled_time, properties=None, session_id=None) -> MessageResult
+cancel(queue_name, message_id) -> bool  # Where supported (Azure only)
 
 # Dead letter queue operations (unified interface)
-get_dead_letter_messages(queue_name, max_count=10) -> list
-reprocess_dead_letter_message(queue_name, message_id) -> bool
-purge_dead_letter_queue(queue_name) -> bool
-```
-
-#### Pub/Sub Operations (when supported)
-
-```python
-# Topic management (Azure Service Bus only, graceful failure on AWS SQS)
-create_topic(name, **options) -> Topic
-delete_topic(name) -> bool
-list_topics(prefix="") -> list
-topic_exists(name) -> bool
-
-# Subscription management
-create_subscription(topic_name, subscription_name, **options) -> Subscription
-delete_subscription(topic_name, subscription_name) -> bool
-list_subscriptions(topic_name) -> list
-
-# Publish/Subscribe operations
-publish_message(topic_name, body, **options) -> MessageResult
-subscribe_messages(topic_name, subscription_name, max_count=1, **options) -> list
-
-# Message filtering (Azure Service Bus only)
-add_subscription_filter(topic_name, subscription_name, rule_name, filter_expression) -> bool
-remove_subscription_filter(topic_name, subscription_name, rule_name) -> bool
-list_subscription_filters(topic_name, subscription_name) -> list
+dlq_receive(queue_name, max_count=10) -> list
+dlq_reprocess(queue_name, message_id) -> bool
+dlq_purge(queue_name) -> bool
 ```
 
 ### Unified API Implementation
@@ -170,12 +156,11 @@ list_subscription_filters(topic_name, subscription_name) -> list
 
 | Function | Implementation Strategy | AWS SQS Mapping | Azure Service Bus Mapping |
 |----------|-------------------------|-----------------|---------------------------|
-| `send_message()` | Direct mapping | Native SQS API | Native Service Bus API |
-| `receive_messages()` | Adaptive batch size | max_count ≤ 10 | max_count ≤ 32 |
-| `delete_message()` | Direct mapping | Native delete | Native complete |
-| `delete_messages()` | Auto-batch splitting | Batch ≤ 10 | Batch ≤ 100 |
-| `extend_message_lock()` | Unified lock concept | Change visibility timeout | Renew message lock |
-| `release_message_lock()` | Early release | Change to 0 seconds | Abandon message |
+| `send()` | Direct mapping | Native SQS API | Native Service Bus API |
+| `receive()` | Adaptive batch size | max_count ≤ 10 | max_count ≤ 32 |
+| `delete()` | Auto-batch handling | Native delete | Native complete |
+| `lock()` | Unified lock concept | Change visibility timeout | Renew message lock |
+| `unlock()` | Early release | Change to 0 seconds | Abandon message |
 
 #### Queue Management (Universal Support)
 
@@ -184,26 +169,25 @@ list_subscription_filters(topic_name, subscription_name) -> list
 | `create_queue()` | Unified options mapping | CreateQueue API | CreateQueue API |
 | `delete_queue()` | Direct mapping | DeleteQueue API | DeleteQueue API |
 | `list_queues()` | Direct mapping | ListQueues API | ListQueues API |
-| `get_queue_info()` | Normalized attributes | GetQueueAttributes | GetQueueRuntimeProperties |
-| `purge_queue()` | Direct mapping | PurgeQueue API | Native purge |
+| `get_info()` | Normalized attributes | GetQueueAttributes | GetQueueRuntimeProperties |
+| `purge()` | Direct mapping | PurgeQueue API | Native purge |
 
 #### Smart Adaptations
 
 | Function | AWS SQS Behavior | Azure Service Bus Behavior | Unified Behavior |
 |----------|------------------|----------------------------|------------------|
-| `peek_messages()` | Return empty + warning | Native peek | Graceful fallback |
-| `send_scheduled_message()` | delay_seconds (≤15min) | scheduled_enqueue_time | Auto-convert/warn |
-| `cancel_scheduled_message()` | fail() with explanation | Native cancel | Conditional support |
-| `send_messages_batch()` | Auto-split to batches of 10 | Auto-split to batches of 100 | Transparent handling |
+| `peek()` | Return local error | Native peek | Conditional support |
+| `schedule()` | delay_seconds (≤15min) | scheduled_enqueue_time | Pass to service for validation |
+| `cancel()` | Return local error | Native cancel | Conditional support |
+| `batch_send()` | Auto-split to batches of 10 | Auto-split to batches of 100 | Transparent handling |
 
-#### Pub/Sub Operations (Conditional Support)
+#### Error Handling Strategy
 
-| Function | AWS SQS Behavior | Azure Service Bus Behavior | Unified Behavior |
-|----------|------------------|----------------------------|------------------|
-| `create_topic()` | fail() with SNS guidance | Native create | Conditional implementation |
-| `publish_message()` | fail() with SNS guidance | Native publish | Conditional implementation |
-| `create_subscription()` | fail() with SNS guidance | Native create | Conditional implementation |
-| `subscribe_messages()` | fail() with SNS guidance | Native receive | Conditional implementation |
+| Scenario | AWS SQS | Azure Service Bus | Implementation |
+|----------|---------|-------------------|----------------|
+| **Unsupported features** | Local error with guidance | Local error with guidance | Immediate fail() |
+| **Service limits exceeded** | Pass to service | Pass to service | Let service return error |
+| **Invalid parameters** | Local validation | Local validation | Early parameter validation |
 
 ### Unified Parameter Design
 
@@ -229,7 +213,7 @@ list_subscription_filters(topic_name, subscription_name) -> list
 | `correlation_id` | Request correlation | Not supported | `correlation_id` | None |
 | `reply_to` | Response destination | Not supported | `reply_to` | None |
 | `time_to_live` | Message TTL | Use queue retention | `time_to_live` | Queue default |
-| `deduplication_id` | Duplicate detection | `message_deduplication_id` | `message_id` | Auto-generated |
+| `message_id` | Duplicate detection | `message_deduplication_id` | `message_id` | Auto-generated |
 
 #### Receive Options (Normalized)
 
@@ -260,10 +244,9 @@ list_subscription_filters(topic_name, subscription_name) -> list
 |------------|-------------|------------|
 | **No FIFO Queues** | No dedicated FIFO queue type | Use Sessions for ordering |
 | **Premium Tier Required** | Some features need Premium | Plan tier accordingly |
-| **Connection Limits** | Connection string based auth | Use managed identity |
-| **Message Size** | 256KB (1MB Premium) | Use blob storage |
-| **Session Concurrency** | One processor per session | Multiple sessions |
-| **Subscription Limits** | 2000 subscriptions per topic | Design topic hierarchy |
+| **Connection String Auth** | Connection string based auth | Use managed identity when possible |
+| **Message Size** | 256KB (1MB Premium) | Use blob storage for large messages |
+| **Session Concurrency** | One processor per session | Use multiple sessions for parallelism |
 
 ### Error Handling Differences
 
@@ -318,7 +301,6 @@ list_subscription_filters(topic_name, subscription_name) -> list
     "delivery_count": 1,
     "lock_expires_at": "2024-01-01T12:30:00Z", # When lock expires
     "time_to_live": 3600,                    # Message TTL in seconds
-    "deduplication_id": "dedup-789",         # For duplicate detection
     "receipt_handle": "service-specific-handle", # Internal use
     "success": True,
     "error": None
@@ -352,80 +334,33 @@ list_subscription_filters(topic_name, subscription_name) -> list
 }
 ```
 
-#### Topic (Azure Service Bus Only)
-
-```python
-{
-    "name": "topic-name",
-    "service_type": "azure_servicebus",
-    "subscription_count": 3,
-    "message_count": 156,
-    "size_in_bytes": 1048576,
-    "max_size": 1073741824,
-    "retention_period": 1209600,
-    "duplicate_detection": {
-        "enabled": True,
-        "window_seconds": 300
-    },
-    "created_time": "2024-01-01T10:00:00Z",
-    "modified_time": "2024-01-01T10:00:00Z"
-}
-```
-
-#### Subscription (Azure Service Bus Only)
-
-```python
-{
-    "name": "subscription-name",
-    "topic_name": "topic-name",
-    "message_count": 23,
-    "dead_letter_message_count": 1,
-    "lock_duration": 60,
-    "max_delivery_count": 10,
-    "filters": [
-        {
-            "name": "priority-filter",
-            "expression": "priority = 'high'",
-            "type": "sql_filter"
-        }
-    ],
-    "created_time": "2024-01-01T10:00:00Z"
-}
-```
-
 ## Configuration System
 
 The module integrates with the base package configuration system:
 
 ```go
 // Primary service configuration
-ServiceType        *ConfigOption[string] // "aws_sqs", "azure_servicebus", "auto"
-ConnectionString   *ConfigOption[string] // Azure Service Bus connection string
-Timeout           *ConfigOption[int]    // Connection timeout in seconds
-MaxRetries        *ConfigOption[int]    // Maximum retry attempts
+ServiceType      *ConfigOption[string] // "aws_sqs", "azure_servicebus", "auto"
+ConnectionString *ConfigOption[string] // Azure Service Bus connection string (secret)
+Timeout          *ConfigOption[int]    // Connection timeout in seconds
+MaxRetries       *ConfigOption[int]    // Maximum retry attempts
 
 // AWS SQS Configuration
-AWSRegion         *ConfigOption[string] // AWS region
-AWSAccessKey      *ConfigOption[string] // AWS access key ID (secret)
-AWSSecretKey      *ConfigOption[string] // AWS secret key (secret)
-AWSSessionToken   *ConfigOption[string] // AWS session token (secret)
-
-// Azure Service Bus Configuration
-AzureNamespace    *ConfigOption[string] // Service Bus namespace
-AzureSharedKey    *ConfigOption[string] // Shared access key (secret)
-AzureKeyName      *ConfigOption[string] // Shared access key name
+AWSRegion        *ConfigOption[string] // AWS region
+AWSAccessKey     *ConfigOption[string] // AWS access key ID (secret)
+AWSSecretKey     *ConfigOption[string] // AWS secret key (secret)
+AWSSessionToken  *ConfigOption[string] // AWS session token (secret)
 
 // Performance and Behavior
-DefaultVisibilityTimeout *ConfigOption[int] // Default message visibility timeout
-DefaultBatchSize         *ConfigOption[int] // Default batch size for operations
-EnableDeadLetterQueue    *ConfigOption[bool] // Enable dead letter queue support
+DefaultLockDuration *ConfigOption[int]  // Default message lock duration in seconds
+DefaultBatchSize    *ConfigOption[int]  // Default batch size for operations
 ```
 
 ### Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `MQ_SERVICE_TYPE` | Service type (aws_sqs, azure_servicebus) | auto |
+| `MQ_SERVICE_TYPE` | Service type (aws_sqs, azure_servicebus, auto) | auto |
 | `MQ_CONNECTION_STRING` | Azure Service Bus connection string | - |
 | `MQ_AWS_REGION` | AWS region for SQS | us-east-1 |
 | `AWS_ACCESS_KEY_ID` | AWS access key ID | - |
@@ -433,49 +368,56 @@ EnableDeadLetterQueue    *ConfigOption[bool] // Enable dead letter queue support
 | `AWS_SESSION_TOKEN` | AWS session token (optional) | - |
 | `MQ_TIMEOUT` | Connection timeout in seconds | 30 |
 | `MQ_MAX_RETRIES` | Maximum retry attempts | 3 |
+| `MQ_DEFAULT_LOCK_DURATION` | Default message lock duration | 30 |
+| `MQ_DEFAULT_BATCH_SIZE` | Default batch size for operations | 10 |
 
-## Complete Usage Examples
+## 🚀 Quick Start
 
-### Unified Queue Operations
+### Basic Usage
 
 ```python
 load("mq", "connect")
 
 def main():
-    # Connect to AWS SQS with unified configuration
+    # Connect to AWS SQS with auto-detection
     client = connect(
         service_type="aws_sqs",
         aws_region="us-west-2"
     )
     
     # Create a queue with unified parameters
-    queue = client.create_queue("my-work-queue", {
-        "lock_duration": 60,                    # Unified visibility/lock timeout
-        "max_delivery_count": 5,
-        "dead_letter_config": {                 # Unified DLQ configuration
+    queue = client.create_queue(
+        "my-work-queue",
+        lock_duration=60,
+        max_delivery_count=5,
+        dead_letter_config={
             "enabled": True,
             "queue_name": "my-dlq"
         }
-    })
+    )
     
     if queue == None:
         fail("Failed to create queue")
     
     # Send a message with unified properties
-    result = client.send_message("my-work-queue", "Hello, World!", {
-        "properties": {                         # Unified message properties
+    result = client.send(
+        "my-work-queue", 
+        "Hello, World!",
+        properties={
             "priority": "high",
             "sender": "worker-1"
         }
-    })
+    )
     
     print("Message sent with ID: {}".format(result.message_id))
     
     # Receive messages with unified options
-    messages = client.receive_messages("my-work-queue", max_count=5, {
-        "wait_time": 20,                       # Long polling (auto-adapted)
-        "lock_duration": 30                    # Unified lock duration
-    })
+    messages = client.receive(
+        "my-work-queue", 
+        max_count=5,
+        wait_time=20,
+        lock_duration=30
+    )
     
     for message in messages:
         print("Processing message: {}".format(message.body))
@@ -486,10 +428,10 @@ def main():
         
         if success:
             # Delete message after successful processing
-            client.delete_message("my-work-queue", message.message_id)
+            client.delete("my-work-queue", message.message_id)
         else:
             # Extend lock duration for retry
-            client.extend_message_lock("my-work-queue", message.message_id, 60)
+            client.lock("my-work-queue", message.message_id, 60)
             print("Extended lock for message {}, will retry".format(message.message_id))
 
 def process_message(message):
@@ -500,10 +442,10 @@ def process_message(message):
 main()
 ```
 
-### Unified Pub/Sub with Topics (Azure Service Bus)
+### Azure Service Bus with Sessions
 
 ```python
-load("mq", "connect", "check_feature_support")
+load("mq", "connect")
 
 def main():
     # Connect to Azure Service Bus
@@ -512,77 +454,57 @@ def main():
         connection_string="Endpoint=sb://namespace.servicebus.windows.net/;..."
     )
     
-    # Check if topics are supported
-    if not check_feature_support(client, "topics"):
-        fail("Topics not supported with this service type")
+    # Create a queue with session support for message ordering
+    queue = client.create_queue(
+        "order-processing",
+        lock_duration=60,
+        max_delivery_count=5,
+        enable_sessions=True,
+        duplicate_detection=True
+    )
     
-    # Create topic with unified configuration
-    topic = client.create_topic("order-events", {
-        "max_queue_size": 1073741824,          # 1GB in bytes
-        "retention_period": 86400,             # 24 hours
-        "duplicate_detection": {
-            "enabled": True,
-            "window_seconds": 300
-        }
-    })
-    
-    # Create subscriptions with unified filters
-    client.create_subscription("order-events", "payment-processor", {
-        "lock_duration": 60,
-        "max_delivery_count": 5
-    })
-    
-    client.create_subscription("order-events", "inventory-manager", {
-        "lock_duration": 60,
-        "max_delivery_count": 3
-    })
-    
-    # Add filters using unified API
-    client.add_subscription_filter("order-events", "payment-processor", 
-                                  "payment-filter", "event_type = 'payment'")
-    
-    client.add_subscription_filter("order-events", "inventory-manager",
-                                  "inventory-filter", "event_type IN ('order_created', 'order_cancelled')")
-    
-    # Publish messages with unified properties
-    events = [
-        {"event_type": "payment", "order_id": "12345", "amount": 99.99},
-        {"event_type": "order_created", "order_id": "12346", "items": 3},
-        {"event_type": "payment", "order_id": "12346", "amount": 149.50}
+    # Send messages with session grouping
+    orders = [
+        {"order_id": "12345", "event": "created", "amount": 99.99},
+        {"order_id": "12345", "event": "paid", "amount": 99.99},
+        {"order_id": "12346", "event": "created", "amount": 149.50}
     ]
     
-    for event in events:
-        result = client.publish_message("order-events", encode_json(event), {
-            "properties": {                     # Unified properties
-                "event_type": event["event_type"],
+    for order in orders:
+        result = client.send(
+            "order-processing",
+            encode_json(order),
+            properties={
+                "event_type": order["event"],
                 "timestamp": get_current_time()
             },
-            "correlation_id": "batch-001",      # Unified correlation
-            "session_id": event["order_id"]     # Unified session grouping
-        })
-        print("Published event {} with ID: {}".format(event["event_type"], result.message_id))
+            session_id=order["order_id"],  # Ensures ordering per order
+            correlation_id="batch-001"
+        )
+        print("Sent order event: {} for order {}".format(order["event"], order["order_id"]))
     
-    # Process subscription messages with unified API
-    payment_messages = client.subscribe_messages("order-events", "payment-processor", 
-                                                max_count=10, {
-                                                    "wait_time": 30,
-                                                    "lock_duration": 60
-                                                })
+    # Receive messages by session (guarantees order)
+    messages = client.receive(
+        "order-processing",
+        max_count=10,
+        wait_time=30,
+        lock_duration=60
+    )
     
-    for msg in payment_messages:
-        print("Payment processor received: {}".format(msg.body))
+    for msg in messages:
+        print("Processing order event: {}".format(msg.body))
         print("Session ID: {}".format(msg.session_id))
         print("Correlation ID: {}".format(msg.correlation_id))
         
-        # Process and delete with unified API
-        if process_event(msg):
-            client.delete_message("order-events", msg.message_id)
+        # Process and delete
+        if process_order_event(msg):
+            client.delete("order-processing", msg.message_id)
         else:
             # Extend lock for retry
-            client.extend_message_lock("order-events", msg.message_id, 60)
+            client.lock("order-processing", msg.message_id, 60)
 
-def process_event(message):
-    # Simulate event processing
+def process_order_event(message):
+    # Simulate order event processing
     return True
 
 def encode_json(obj):
@@ -608,37 +530,32 @@ def main():
     for i in range(100):
         messages.append({
             "body": "Batch message {}".format(i),
-            "attributes": {
+            "properties": {
                 "batch_id": "batch-001",
                 "sequence": str(i)
             }
         })
     
-    # Send messages in batches (SQS allows up to 10 per batch)
-    batch_size = 10
-    total_sent = 0
+    # Send messages in batches (auto-adapts to service limits)
+    results = client.batch_send("batch-queue", messages)
     
-    for i in range(0, len(messages), batch_size):
-        batch = messages[i:i + batch_size]
-        results = client.send_messages("batch-queue", batch)
-        
-        successful = [r for r in results if r.success]
-        failed = [r for r in results if not r.success]
-        
-        total_sent += len(successful)
-        
-        if len(failed) > 0:
-            print("Failed to send {} messages in batch {}".format(len(failed), i // batch_size))
-            for failure in failed:
-                print("Error: {}".format(failure.error))
+    successful = [r for r in results if r.success]
+    failed = [r for r in results if not r.success]
     
-    print("Successfully sent {} out of {} messages".format(total_sent, len(messages)))
+    print("Successfully sent {} out of {} messages".format(len(successful), len(messages)))
+    
+    if len(failed) > 0:
+        print("Failed to send {} messages".format(len(failed)))
+        for failure in failed:
+            print("Error: {}".format(failure.error))
     
     # Batch receive and process (using for loop with range for bounded processing)
     for batch_round in range(100):  # Process up to 100 batches
-        messages = client.receive_messages("batch-queue", max_count=10, {
-            "wait_time": 5  # Short polling for batch processing
-        })
+        messages = client.receive(
+            "batch-queue", 
+            max_count=10,
+            wait_time=5  # Short polling for batch processing
+        )
         
         if len(messages) == 0:
             print("No more messages to process")
@@ -652,7 +569,7 @@ def main():
         
         # Batch delete successful messages
         if len(processed_ids) > 0:
-            delete_results = client.delete_messages("batch-queue", processed_ids)
+            delete_results = client.delete("batch-queue", processed_ids)
             successful_deletes = [r for r in delete_results if r]
             print("Successfully deleted {} messages".format(len(successful_deletes)))
 
@@ -672,18 +589,22 @@ def main():
     client = connect()
     
     # Set up main queue with DLQ
-    main_queue = client.create_queue("processing-queue", {
-        "visibility_timeout": 30,
-        "max_delivery_count": 3,
-        "dead_letter_queue": "processing-dlq"
-    })
+    main_queue = client.create_queue(
+        "processing-queue",
+        lock_duration=30,
+        max_delivery_count=3,
+        dead_letter_config={
+            "enabled": True,
+            "queue_name": "processing-dlq"
+        }
+    )
     
     # Create the dead letter queue
     dlq = client.create_queue("processing-dlq")
     
     # Process main queue (using for loop with range for bounded processing)
     for processing_round in range(50):  # Process up to 50 rounds
-        messages = client.receive_messages("processing-queue", max_count=5)
+        messages = client.receive("processing-queue", max_count=5)
         if len(messages) == 0:
             print("No more messages to process")
             break
@@ -691,13 +612,13 @@ def main():
         for msg in messages:
             success = process_with_potential_failure(msg)
             if success:
-                client.delete_message("processing-queue", msg.message_id)
+                client.delete("processing-queue", msg.message_id)
             else:
                 # Let it retry (will eventually go to DLQ)
                 print("Processing failed for message {}, will retry".format(msg.message_id))
     
     # Handle dead letter messages
-    dead_messages = client.get_dead_letter_messages("processing-queue", max_count=10)
+    dead_messages = client.dlq_receive("processing-queue", max_count=10)
     print("Found {} messages in dead letter queue".format(len(dead_messages)))
     
     for dead_msg in dead_messages:
@@ -707,8 +628,8 @@ def main():
         # Decide what to do with dead letter messages
         if should_requeue(dead_msg):
             # Move back to main queue
-            client.requeue_dead_letter_message("processing-queue", dead_msg.message_id)
-            print("Requeued message {}".format(dead_msg.message_id))
+            client.dlq_reprocess("processing-queue", dead_msg.message_id)
+            print("Reprocessed message {}".format(dead_msg.message_id))
         else:
             # Log and remove
             log_dead_message(dead_msg)
@@ -716,8 +637,6 @@ def main():
 
 def process_with_potential_failure(message):
     # Simulate processing that might fail
-    # Note: Starlark doesn't have 'import random', this is just for example
-    # In real usage, you would implement your actual processing logic
     return True  # Simplified for Starlark compatibility
 
 def should_requeue(message):
@@ -733,7 +652,7 @@ main()
 ### Multi-Service Configuration and Feature Detection
 
 ```python
-load("mq", "connect", "get_supported_services", "get_client_info")
+load("mq", "connect", "get_supported_services", "get_client_info", "check_feature_support")
 
 def main():
     # List supported services
@@ -763,39 +682,39 @@ def main():
     handle_service_differences(aws_client, azure_client)
     
     # Cross-service message forwarding with feature detection
-    forward_messages_with_feature_detection(aws_client, azure_client)
+    forward_messages_between_services(aws_client, azure_client)
 
 def handle_service_differences(aws_client, azure_client):
     """Demonstrate handling of service-specific features"""
     
-    # AWS SQS: Use visibility timeout (not available in Azure)
-    messages = aws_client.receive_messages("test-queue", max_count=5, {
-        "visibility_timeout": 60,  # AWS SQS specific
-        "wait_time": 10           # Long polling
-    })
+    # AWS SQS: Standard message processing
+    messages = aws_client.receive(
+        "test-queue", 
+        max_count=5,
+        wait_time=10,
+        lock_duration=60
+    )
     
     for msg in messages:
-        # AWS: Change visibility timeout (extend processing time)
-        aws_client.change_message_visibility("test-queue", msg.message_id, 120)
-        
-        # Process message...
+        # Process message and extend lock if needed
         if process_message(msg):
-            aws_client.delete_message("test-queue", msg.message_id)
+            aws_client.delete("test-queue", msg.message_id)
+        else:
+            aws_client.lock("test-queue", msg.message_id, 120)
     
-    # Azure Service Bus: Use lock duration and peek (not available in AWS)
-    # Note: Starlark doesn't have try/except, use conditional checks instead
-    
-    # Check if peek is supported before calling
-    if check_feature_support(azure_client, "peek_messages"):
+    # Azure Service Bus: Check peek support
+    if check_feature_support(azure_client, "peek"):
         # Peek messages without receiving them (Azure only)
-        peeked = azure_client.peek_messages("test-queue", max_count=5)
+        peeked = azure_client.peek("test-queue", max_count=5)
         print("Peeked {} messages from Azure queue".format(len(peeked)))
     
-    # Receive with lock duration (Azure equivalent of visibility timeout)
-    azure_messages = azure_client.receive_messages("test-queue", max_count=5, {
-        "wait_time": 30,     # Azure supports longer wait times
-        "receive_mode": "peek_lock"
-    })
+    # Receive with session support (Azure Service Bus)
+    azure_messages = azure_client.receive(
+        "test-queue", 
+        max_count=5,
+        wait_time=30,
+        lock_duration=60
+    )
     
     for msg in azure_messages:
         # Process message with session support (Azure only)
@@ -803,51 +722,31 @@ def handle_service_differences(aws_client, azure_client):
             print("Processing session message: {}".format(msg.session_id))
         
         if process_message(msg):
-            azure_client.delete_message("test-queue", msg.message_id)
+            azure_client.delete("test-queue", msg.message_id)
 
-def forward_messages_with_feature_detection(source_client, dest_client):
+def forward_messages_between_services(source_client, dest_client):
     """Forward messages between services handling different capabilities"""
     
     # Get source client info to adapt behavior
     source_info = get_client_info(source_client)
     dest_info = get_client_info(dest_client)
     
-    # Adjust batch size based on service capabilities
-    if source_info["service_type"] == "aws_sqs":
-        batch_size = 10  # AWS SQS limit
-    else:
-        batch_size = 32  # Azure Service Bus limit
-    
-    messages = source_client.receive_messages("source-queue", max_count=batch_size)
+    # Receive messages from source
+    messages = source_client.receive("source-queue", max_count=10)
     
     for msg in messages:
-        # Build message options based on destination service
-        send_options = {
-            "attributes": msg.attributes if msg.attributes else {}
-        }
-        
-        # Handle service-specific message properties
-        if dest_info["service_type"] == "azure_servicebus":
-            # Azure Service Bus specific options
-            if msg.correlation_id != None:
-                send_options["correlation_id"] = msg.correlation_id
-            if msg.session_id != None:
-                send_options["session_id"] = msg.session_id
-            # Use scheduled enqueue time for delays
-            send_options["scheduled_enqueue_time"] = get_future_timestamp(300)  # 5 min delay
-            
-        elif dest_info["service_type"] == "aws_sqs":
-            # AWS SQS specific options
-            send_options["delay_seconds"] = 300  # 5 min delay (max 15 min)
-            if msg.message_group_id != None:
-                send_options["message_group_id"] = msg.message_group_id
-        
-        # Forward message with appropriate options
-        result = dest_client.send_message("destination-queue", msg.body, send_options)
+        # Forward message with unified properties
+        result = dest_client.send(
+            "destination-queue",
+            msg.body,
+            properties=msg.properties,
+            session_id=msg.session_id,
+            correlation_id=msg.correlation_id
+        )
         
         if result.success:
             # Delete from source after successful forward
-            source_client.delete_message("source-queue", msg.message_id)
+            source_client.delete("source-queue", msg.message_id)
             print("Forwarded {} -> {} (from {} to {})".format(
                 msg.message_id, 
                 result.message_id,
@@ -857,55 +756,6 @@ def forward_messages_with_feature_detection(source_client, dest_client):
         else:
             print("Failed to forward message: {}".format(result.error))
 
-def handle_topic_operations():
-    """Demonstrate Azure Service Bus topic operations (not available in AWS SQS)"""
-    
-    client = connect(service_type="azure_servicebus")
-    client_info = get_client_info(client)
-    
-    # Check if topics are supported
-    if client_info["service_type"] == "azure_servicebus":
-        # Create topic with subscriptions
-        topic = client.create_topic("order-events", {
-            "max_size": "1GB",
-            "duplicate_detection_window": 300  # 5 minutes
-        })
-        
-        # Create filtered subscriptions
-        client.create_subscription("order-events", "high-priority", {
-            "filter": "priority = 'high'"
-        })
-        
-        client.create_subscription("order-events", "payment-events", {
-            "filter": "event_type = 'payment'"
-        })
-        
-        # Publish messages with different properties
-        events = [
-            {"type": "order", "priority": "high", "id": "12345"},
-            {"type": "payment", "priority": "normal", "id": "12346"}
-        ]
-        
-        for event in events:
-            result = client.publish_message("order-events", encode_json(event), {
-                "properties": {
-                    "event_type": event["type"],
-                    "priority": event["priority"]
-                }
-            })
-            print("Published {} event: {}".format(event["type"], result.message_id))
-        
-        # Process subscription messages
-        high_priority = client.subscribe_messages("order-events", "high-priority", max_count=10)
-        payment_events = client.subscribe_messages("order-events", "payment-events", max_count=10)
-        
-        print("High priority messages: {}".format(len(high_priority)))
-        print("Payment event messages: {}".format(len(payment_events)))
-        
-    else:
-        print("Topic operations not supported with {}".format(client_info["service_type"]))
-        print("Consider using Amazon SNS + SQS for pub/sub patterns")
-
 def process_message(message):
     # Simulate message processing
     return True
@@ -914,15 +764,6 @@ def get_env_var(name):
     # Would use runtime.getenv in real scenario
     return "connection-string-value"
 
-def get_timestamp():
-    return "2024-01-01T12:00:00Z"
-
-def get_future_timestamp(seconds_ahead):
-    return "2024-01-01T12:05:00Z"  # Simplified for example
-
-def encode_json(obj):
-    return str(obj)
-
 main()
 ```
 
@@ -930,20 +771,18 @@ main()
 
 ### File Structure
 
-```
+```text
 mq/
-├── mq.go              # Main module implementation
-├── client.go          # Client interface and factory
-├── aws_sqs.go         # AWS SQS implementation
-├── azure_servicebus.go # Azure Service Bus implementation
-├── message.go         # Message data structures
-├── queue.go           # Queue operations
-├── topic.go           # Topic/subscription operations (Azure)
+├── mq.go              # Main module implementation and Starlark integration
+├── client.go          # ClientWrapper implementing starlark.Value
+├── aws_sqs.go         # AWS SQS client implementation
+├── azure_servicebus.go # Azure Service Bus client implementation
+├── config.go          # Configuration management with base package
+├── message.go         # Message data structures and conversions
+├── queue.go           # Queue operations and utilities
 ├── errors.go          # Error handling and types
-├── config.go          # Configuration management
-├── retry.go           # Retry logic and backoff
-├── mq_test.go         # Unit tests
-├── example_test.go    # Example tests
+├── utils.go           # Utility functions and helpers
+├── example_test.go    # Example tests with Starlark scripts
 ├── go.mod             # Go module definition
 ├── go.sum             # Go module checksums
 ├── README.md          # Documentation
@@ -956,22 +795,51 @@ mq/
 
 ```go
 type Module struct {
-    *base.ConfigurableModule
-    
-    // Configuration options
-    ServiceType    *base.ConfigOption[string]
-    ConnectionString *base.ConfigOption[string]
-    Timeout        *base.ConfigOption[int]
-    MaxRetries     *base.ConfigOption[int]
-    
-    // AWS SQS specific
-    AWSRegion      *base.ConfigOption[string]
-    AWSAccessKey   *base.ConfigOption[string]
-    AWSSecretKey   *base.ConfigOption[string]
-    
-    // Azure Service Bus specific
-    AzureNamespace *base.ConfigOption[string]
-    AzureSharedKey *base.ConfigOption[string]
+    cfgMod *base.ConfigurableModule
+    ext    *base.ConfigurableModuleExt
+}
+
+// NewModule creates a new instance of Module with default configurations
+func NewModule() *Module {
+    return newModuleWithOptions(
+        genConfigOption(configKeyServiceType, "Service type (aws_sqs, azure_servicebus, auto)", "auto"),
+        genSecretConfigOption(configKeyConnectionString, "Azure Service Bus connection string", ""),
+        genConfigOption(configKeyTimeout, "Connection timeout in seconds", 30),
+        genConfigOption(configKeyMaxRetries, "Maximum retry attempts", 3),
+        genConfigOption(configKeyAWSRegion, "AWS region for SQS", "us-east-1"),
+        genSecretConfigOption(configKeyAWSAccessKey, "AWS access key ID", ""),
+        genSecretConfigOption(configKeyAWSSecretKey, "AWS secret access key", ""),
+        genSecretConfigOption(configKeyAWSSessionToken, "AWS session token", ""),
+        genConfigOption(configKeyDefaultLockDuration, "Default message lock duration", 30),
+        genConfigOption(configKeyDefaultBatchSize, "Default batch size for operations", 10),
+    )
+}
+```
+
+#### ClientWrapper for Starlark Integration
+
+```go
+// ClientWrapper wraps the message queue client for Starlark
+type ClientWrapper struct {
+    client    Client
+    methodMap map[string]func() starlark.Value
+    allNames  []string
+}
+
+// Implements starlark.Value and starlark.HasAttrs interfaces
+func (cw *ClientWrapper) String() string {
+    return "<mq.Client>"
+}
+
+func (cw *ClientWrapper) Type() string {
+    return "mq.Client"
+}
+
+func (cw *ClientWrapper) Attr(name string) (starlark.Value, error) {
+    if methodFunc, exists := cw.methodMap[name]; exists {
+        return methodFunc(), nil
+    }
+    return nil, starlark.NoSuchAttrError(fmt.Sprintf("%s has no .%s attribute", cw.Type(), name))
 }
 ```
 
@@ -980,50 +848,32 @@ type Module struct {
 ```go
 type Client interface {
     // Queue operations
-    CreateQueue(name string, options map[string]interface{}) (*Queue, error)
-    DeleteQueue(name string) error
-    ListQueues(prefix string) ([]*Queue, error)
-    GetQueue(name string) (*Queue, error)
-    QueueExists(name string) (bool, error)
+    CreateQueue(ctx context.Context, name string, options QueueOptions) (*Queue, error)
+    DeleteQueue(ctx context.Context, name string) error
+    ListQueues(ctx context.Context, prefix string) ([]*Queue, error)
+    GetQueue(ctx context.Context, name string) (*Queue, error)
+    Exists(ctx context.Context, name string) (bool, error)
     
     // Message operations
-    SendMessage(queueName, body string, options map[string]interface{}) (*MessageResult, error)
-    ReceiveMessages(queueName string, maxCount int, options map[string]interface{}) ([]*MessageResult, error)
-    DeleteMessage(queueName, messageID string, options map[string]interface{}) error
+    Send(ctx context.Context, queueName, body string, options MessageOptions) (*MessageResult, error)
+    Receive(ctx context.Context, queueName string, options ReceiveOptions) ([]*MessageResult, error)
+    Delete(ctx context.Context, queueName string, messageIDs []string) ([]bool, error)
+    
+    // Message lock management
+    Lock(ctx context.Context, queueName, messageID string, duration int) error
+    Unlock(ctx context.Context, queueName, messageID string) error
     
     // Batch operations
-    SendMessages(queueName string, messages []map[string]interface{}) ([]*MessageResult, error)
-    DeleteMessages(queueName string, messageIDs []string) ([]bool, error)
+    BatchSend(ctx context.Context, queueName string, messages []BatchMessage) ([]*MessageResult, error)
     
-    // Topic operations (Azure Service Bus)
-    CreateTopic(name string, options map[string]interface{}) (*Topic, error)
-    PublishMessage(topicName, body string, options map[string]interface{}) (*MessageResult, error)
-    CreateSubscription(topicName, subscriptionName string, options map[string]interface{}) (*Subscription, error)
-    SubscribeMessages(topicName, subscriptionName string, maxCount int, options map[string]interface{}) ([]*MessageResult, error)
+    // Dead letter queue operations
+    DLQReceive(ctx context.Context, queueName string, maxCount int) ([]*MessageResult, error)
+    DLQReprocess(ctx context.Context, queueName, messageID string) error
+    DLQPurge(ctx context.Context, queueName string) error
     
     // Connection management
     Close() error
-    HealthCheck() error
-}
-```
-
-#### Service Implementations
-
-```go
-// AWS SQS Client
-type SQSClient struct {
-    client    *sqs.Client
-    region    string
-    timeout   time.Duration
-    retryConfig retry.Config
-}
-
-// Azure Service Bus Client
-type ServiceBusClient struct {
-    client     *azservicebus.Client
-    namespace  string
-    timeout    time.Duration
-    retryConfig retry.Config
+    GetClientInfo() map[string]interface{}
 }
 ```
 
@@ -1034,8 +884,8 @@ type ServiceBusClient struct {
 require (
     github.com/aws/aws-sdk-go-v2 v1.24.0
     github.com/aws/aws-sdk-go-v2/service/sqs v1.29.0
-    github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus v1.5.0
-    github.com/Azure/azure-sdk-for-go/sdk/azcore v1.9.0
+    github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus v1.8.0
+    github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus/admin v1.8.0
     github.com/1set/starlet v0.16.0
     go.starlark.net v0.0.0-20231121155337-90ade8b19d09
 )
@@ -1053,189 +903,90 @@ require (
 The `mq` module implements the following key normalizations to provide a consistent experience:
 
 #### 1. Message Lock Management (Most Important)
-- **Unified Parameter**: `lock_duration` 
+
+- **Unified Parameter**: `lock_duration`
 - **AWS SQS**: Maps to `visibility_timeout`
 - **Azure Service Bus**: Maps to `lock_duration`
-- **API Functions**: `extend_message_lock()`, `release_message_lock()`
-- **Deprecates**: `change_message_visibility()`, `extend_message_visibility()`
+- **API Functions**: `lock()`, `unlock()`
+- **Implementation**: Unified visibility/lock timeout concept
 
 #### 2. Message Scheduling
+
 - **Unified Parameter**: `scheduled_time` (ISO 8601 timestamp)
-- **AWS SQS**: Converts to `delay_seconds` (warns if >15 minutes)
+- **AWS SQS**: Converts to `delay_seconds` (passes to service for validation)
 - **Azure Service Bus**: Maps to `scheduled_enqueue_time`
-- **API Function**: `send_scheduled_message()`
-- **Deprecates**: `delay_seconds`, `scheduled_enqueue_time`
+- **API Function**: `schedule()`
+- **Error Handling**: Let service return errors for invalid values
 
 #### 3. Message Properties
+
 - **Unified Parameter**: `properties` (dict)
 - **AWS SQS**: Maps to `message_attributes`
 - **Azure Service Bus**: Maps to `application_properties`
-- **Deprecates**: `attributes`, `message_attributes`
+- **Consistent Interface**: Single properties parameter across services
 
 #### 4. Message Grouping/Sessions
+
 - **Unified Parameter**: `session_id`
 - **AWS SQS**: Maps to `message_group_id` (FIFO queues only)
 - **Azure Service Bus**: Maps to `session_id`
-- **Deprecates**: `message_group_id`
+- **Ordering**: Enables message ordering per session
 
 #### 5. Dead Letter Queue Configuration
+
 - **Unified Parameter**: `dead_letter_config` (object)
 - **AWS SQS**: Creates separate DLQ + redrive policy
 - **Azure Service Bus**: Configures built-in dead letter subqueue
-- **Deprecates**: Service-specific DLQ configurations
+- **API Functions**: `dlq_receive()`, `dlq_reprocess()`, `dlq_purge()`
 
 #### 6. Batch Operations
+
 - **Unified Behavior**: Automatic batch size adaptation
 - **AWS SQS**: Auto-splits to batches of ≤10 messages
 - **Azure Service Bus**: Auto-splits to batches of ≤100 messages
-- **API Function**: `send_messages_batch()`, `delete_messages()`
+- **API Function**: `batch_send()`, `delete()` (handles single ID or list)
 - **User Experience**: Transparent handling of service limits
 
 ### Graceful Degradation Patterns
 
 | Feature | AWS SQS Fallback | Azure Service Bus Fallback |
 |---------|------------------|----------------------------|
-| `peek_messages()` | Returns empty list + warning | Native support |
-| `cancel_scheduled_message()` | fail() with explanation | Native support |
-| Topic operations | fail() with SNS guidance | Native support |
+| `peek()` | Local error with guidance | Native support |
+| `cancel()` | Local error with guidance | Native support |
 | `correlation_id` | Ignored (logs warning) | Native support |
 | `reply_to` | Ignored (logs warning) | Native support |
 
-### Removed/Deprecated Features
+### Implementation Strategy
 
-To achieve normalization, the following service-specific functions are **removed**:
-
-- ❌ `change_message_visibility()` → Use `extend_message_lock()`
-- ❌ `extend_message_visibility()` → Use `extend_message_lock()`
-- ❌ `get_queue_attributes()` → Use `get_queue_info()`
-- ❌ `set_queue_attributes()` → Use unified parameters in `create_queue()`
-- ❌ `get_queue_url()` → Service-specific, use `get_queue_info()` for details
-- ❌ `schedule_message()` → Use `send_scheduled_message()`
-- ❌ `requeue_dead_letter_message()` → Use `reprocess_dead_letter_message()`
-
-## Development Plan
-
-### Phase 1: Foundation and AWS SQS Support (Critical)
-
-**Timeline**: 2-3 weeks  
-**Success Criteria**: Basic queue operations working with AWS SQS
-
-- [ ] Set up module structure and base package integration
-- [ ] Implement core configuration system with environment variables
-- [ ] Develop AWS SQS client implementation
-- [ ] Create basic queue operations (create, delete, list, send, receive)
-- [ ] Implement message data structures and conversion
-- [ ] Add error handling and retry logic
-- [ ] Write comprehensive unit tests for SQS operations
-- [ ] Create example tests demonstrating basic usage
-
-### Phase 2: Azure Service Bus Queue Support (High)
-
-**Timeline**: 2-3 weeks  
-**Success Criteria**: Feature parity between AWS SQS and Azure Service Bus queues
-
-- [ ] Implement Azure Service Bus client for queue operations
-- [ ] Add connection string parsing and authentication
-- [ ] Create unified client interface abstraction
-- [ ] Implement batch operations for performance
-- [ ] Add visibility timeout and dead letter queue support
-- [ ] Write comprehensive tests for Azure Service Bus queues
-- [ ] Create cross-service compatibility tests
-
-### Phase 3: Advanced Features and Performance (High)
-
-**Timeline**: 2-3 weeks  
-**Success Criteria**: Production-ready performance and reliability features
-
-- [ ] Implement batch operations for high throughput scenarios
-- [ ] Add message scheduling and delayed delivery
-- [ ] Create dead letter queue management functionality
-- [ ] Add message attribute and property handling
-- [ ] Implement connection pooling and resource management
-- [ ] Add comprehensive logging and monitoring hooks
-- [ ] Performance testing and optimization
-- [ ] Memory usage optimization and leak detection
-
-### Phase 4: Azure Service Bus Topics and Subscriptions (Medium)
-
-**Timeline**: 2-3 weeks  
-**Success Criteria**: Full pub/sub pattern support with Azure Service Bus
-
-- [ ] Implement topic creation and management
-- [ ] Add subscription creation and rule management
-- [ ] Create message filtering and routing functionality
-- [ ] Implement publish/subscribe operations
-- [ ] Add subscription rule management (SQL filters)
-- [ ] Create topic-specific example tests
-- [ ] Add documentation for pub/sub patterns
-
-### Phase 5: Production Readiness and Documentation (Medium)
-
-**Timeline**: 1-2 weeks  
-**Success Criteria**: Complete documentation and production deployment support
-
-- [ ] Complete README.md with comprehensive examples
-- [ ] Add troubleshooting guide and common patterns
-- [ ] Create migration guides from other message queue libraries
-- [ ] Add performance benchmarking suite
-- [ ] Security audit and best practices documentation
-- [ ] Create deployment examples for different environments
-- [ ] Final integration testing across all supported services
-
-## Testing Strategy
-
-### Unit Tests
-
-- **Coverage Target**: 90%+ line coverage
-- **Focus Areas**: Configuration parsing, message serialization, error handling
-- **Mock Strategy**: Mock external service calls using interfaces
-- **Test Data**: Comprehensive test fixtures for different message types
-
-### Integration Tests
-
-- **Real Services**: Tests against actual AWS SQS and Azure Service Bus
-- **Environment Setup**: Docker containers for local testing when possible
-- **Credential Management**: Secure handling of test credentials
-- **Clean-up**: Automatic resource cleanup after test runs
-
-### Example Tests
-
-- **Documentation Validation**: All README examples must pass tests
-- **Error Scenarios**: Test common error conditions and recovery
-- **Performance Tests**: Batch operation throughput and latency
-- **Cross-Service Tests**: Message forwarding between services
-
-### Performance Testing
-
-- **Throughput Benchmarks**: Messages per second for different scenarios
-- **Memory Usage**: Monitor memory consumption under load
-- **Connection Pooling**: Validate connection reuse and lifecycle
-- **Latency Measurement**: End-to-end message delivery times
+| Scenario | Implementation | Rationale |
+|----------|---------------|-----------|
+| **Unsupported features** | Local fail() with clear guidance | Immediate feedback to user |
+| **Service limits exceeded** | Pass to service, return service error | Let cloud provider validate |
+| **Invalid parameters** | Early validation where possible | Catch obvious errors quickly |
+| **Service-specific errors** | Normalize common error types | Consistent error experience |
 
 ## Security & Performance
 
 ### Security Considerations
 
-- **Credential Management**: All API keys and connection strings handled as secrets
+- **Credential Management**: All API keys and connection strings handled as secrets using base package
 - **Transport Security**: Enforce TLS for all service communications
-- **Message Content**: Support for message encryption/decryption helpers
-- **Access Control**: Proper IAM integration for AWS services
-- **Audit Logging**: Comprehensive logging of all operations for security monitoring
+- **Context Handling**: Proper context propagation from Starlark thread using `dataconv.GetThreadContext()`
+- **Access Control**: Proper IAM integration for AWS services and Azure authentication
+- **Input Validation**: Sanitize and validate all user inputs before passing to cloud services
 
 ### Performance Optimizations
 
-- **Connection Pooling**: Reuse HTTP connections across operations
-- **Batch Operations**: Leverage service-native batching for high throughput
-- **Async Operations**: Use Go routines for concurrent message processing
-- **Memory Management**: Efficient message buffering and streaming
-- **Retry Logic**: Exponential backoff with jitter to avoid thundering herd
+- **Connection Pooling**: Reuse HTTP connections across operations for better performance
+- **Batch Operations**: Leverage service-native batching with automatic size adaptation
+- **Context Propagation**: Use thread context from `dataconv.GetThreadContext()` for proper cancellation
+- **Memory Management**: Efficient message handling and conversion between Starlark and Go types
+- **Retry Logic**: Exponential backoff with jitter for resilient operations
 
-### Best Practices
+### Implementation Guidelines
 
-- **Resource Cleanup**: Automatic connection and resource disposal
-- **Error Recovery**: Graceful degradation and circuit breaker patterns
-- **Monitoring Integration**: Hooks for metrics collection and alerting
-- **Configuration Validation**: Early validation of service configuration
-- **Documentation**: Clear guidance on production deployment and scaling
-
-This comprehensive plan provides a roadmap for implementing a production-ready message queue module that serves as a unified interface for cloud messaging services while maintaining the simplicity and safety of the Starlark runtime environment.
+- **Error Handling**: Let cloud services validate parameters and return normalized errors
+- **Feature Detection**: Use `check_feature_support()` to gracefully handle service differences
+- **Starlark Integration**: Follow s3 module patterns for ClientWrapper and method exposure
+- **Configuration**: Use base package configuration system with proper secret handling
+- **Testing**: Comprehensive example tests with real Starlark scripts
