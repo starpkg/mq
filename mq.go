@@ -4,6 +4,7 @@ package mq
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/1set/starlet"
@@ -17,71 +18,86 @@ const ModuleName = "mq"
 
 // Configuration key constants
 const (
-	configKeyServiceType      = "service_type"
-	configKeyConnectionString = "connection_string"
-	configKeyTimeout          = "timeout"
-	configKeyMaxRetries       = "max_retries"
-	configKeyAWSRegion        = "aws_region"
-	configKeyAWSAccessKey     = "aws_access_key"
-	configKeyAWSSecretKey     = "aws_secret_key"
-	configKeyAWSSessionToken  = "aws_session_token"
-	configKeyAzureNamespace   = "azure_namespace"
-	configKeyAzureSharedKey   = "azure_shared_key"
-	configKeyAzureKeyName     = "azure_key_name"
+	// Common configuration
+	configKeyServiceType = "service_type"
+	configKeyTimeout     = "timeout"
+	configKeyMaxRetries  = "max_retries"
+
+	// AWS SQS configuration
+	configKeyAWSRegion       = "aws_region"
+	configKeyAWSAccessKey    = "aws_access_key"
+	configKeyAWSSecretKey    = "aws_secret_key"
+	configKeyAWSSessionToken = "aws_session_token"
+
+	// Azure Service Bus configuration
+	configKeyAzureConnectionString = "azure_connection_string"
+	configKeyAzureNamespace        = "azure_namespace"
+	configKeyAzureSharedKey        = "azure_shared_key"
+	configKeyAzureKeyName          = "azure_key_name"
 )
 
 // Module wraps the ConfigurableModule with specific functionality for message queue operations
 type Module struct {
 	cfgMod *base.ConfigurableModule
 
-	// Configuration options
-	ServiceType      *base.ConfigOption[string]
-	ConnectionString *base.ConfigOption[string]
-	Timeout          *base.ConfigOption[int]
-	MaxRetries       *base.ConfigOption[int]
+	// Common configuration options
+	ServiceType *base.ConfigOption[string]
+	Timeout     *base.ConfigOption[int]
+	MaxRetries  *base.ConfigOption[int]
 
-	// AWS SQS specific
+	// AWS SQS configuration options
 	AWSRegion       *base.ConfigOption[string]
 	AWSAccessKey    *base.ConfigOption[string]
 	AWSSecretKey    *base.ConfigOption[string]
 	AWSSessionToken *base.ConfigOption[string]
 
-	// Azure Service Bus specific
-	AzureNamespace *base.ConfigOption[string]
-	AzureSharedKey *base.ConfigOption[string]
-	AzureKeyName   *base.ConfigOption[string]
+	// Azure Service Bus configuration options
+	AzureConnectionString *base.ConfigOption[string]
+	AzureNamespace        *base.ConfigOption[string]
+	AzureSharedKey        *base.ConfigOption[string]
+	AzureKeyName          *base.ConfigOption[string]
 }
 
 // NewModule creates a new instance of Module with default configurations
 func NewModule() *Module {
 	return newModuleWithOptions(
-		genConfigOption(configKeyServiceType, "Service type (aws_sqs, azure_servicebus, auto)", ServiceTypeAuto),
-		genConfigOption(configKeyConnectionString, "Azure Service Bus connection string", "").SetSecret(true),
+		// Common configuration
+		genConfigOption(configKeyServiceType, "Message queue service type (aws_sqs, azure_servicebus, auto)", ServiceTypeAuto),
 		genConfigOption(configKeyTimeout, "Connection timeout in seconds", 30),
 		genConfigOption(configKeyMaxRetries, "Maximum retry attempts", 3),
+
+		// AWS SQS configuration
 		genConfigOption(configKeyAWSRegion, "AWS region for SQS", "us-east-1"),
-		genConfigOption(configKeyAWSAccessKey, "AWS access key ID", "").SetSecret(true),
-		genConfigOption(configKeyAWSSecretKey, "AWS secret access key", "").SetSecret(true),
-		genConfigOption(configKeyAWSSessionToken, "AWS session token", "").SetSecret(true),
+		genSecretConfigOption(configKeyAWSAccessKey, "AWS access key ID", ""),
+		genSecretConfigOption(configKeyAWSSecretKey, "AWS secret access key", ""),
+		genSecretConfigOption(configKeyAWSSessionToken, "AWS session token", ""),
+
+		// Azure Service Bus configuration
+		genSecretConfigOption(configKeyAzureConnectionString, "Azure Service Bus connection string", ""),
 		genConfigOption(configKeyAzureNamespace, "Azure Service Bus namespace", ""),
-		genConfigOption(configKeyAzureSharedKey, "Azure Service Bus shared access key", "").SetSecret(true),
+		genSecretConfigOption(configKeyAzureSharedKey, "Azure Service Bus shared access key", ""),
 		genConfigOption(configKeyAzureKeyName, "Azure Service Bus key name", ""),
 	)
 }
 
 // NewModuleWithConfig creates a new instance of Module with the given configuration values
-func NewModuleWithConfig(serviceType, connectionString string, timeout, maxRetries int) *Module {
+func NewModuleWithConfig(serviceType, azureConnectionString string, timeout, maxRetries int) *Module {
 	return newModuleWithOptions(
+		// Common configuration
 		genConfigOption(configKeyServiceType, "Service type with preset value", serviceType),
-		genConfigOption(configKeyConnectionString, "Connection string with preset value", connectionString).SetSecret(true),
 		genConfigOption(configKeyTimeout, "Timeout with preset value", timeout),
 		genConfigOption(configKeyMaxRetries, "Max retries with preset value", maxRetries),
+
+		// AWS SQS configuration
 		genConfigOption(configKeyAWSRegion, "AWS region", "us-east-1"),
-		genConfigOption(configKeyAWSAccessKey, "AWS access key ID", "").SetSecret(true),
-		genConfigOption(configKeyAWSSecretKey, "AWS secret access key", "").SetSecret(true),
-		genConfigOption(configKeyAWSSessionToken, "AWS session token", "").SetSecret(true),
+		genSecretConfigOption(configKeyAWSAccessKey, "AWS access key ID", ""),
+		genSecretConfigOption(configKeyAWSSecretKey, "AWS secret access key", ""),
+		genSecretConfigOption(configKeyAWSSessionToken, "AWS session token", ""),
+
+		// Azure Service Bus configuration
+		genSecretConfigOption(configKeyAzureConnectionString, "Azure connection string with preset value", azureConnectionString),
 		genConfigOption(configKeyAzureNamespace, "Azure Service Bus namespace", ""),
-		genConfigOption(configKeyAzureSharedKey, "Azure Service Bus shared access key", "").SetSecret(true),
+		genSecretConfigOption(configKeyAzureSharedKey, "Azure Service Bus shared access key", ""),
 		genConfigOption(configKeyAzureKeyName, "Azure Service Bus key name", ""),
 	)
 }
@@ -90,72 +106,90 @@ func NewModuleWithConfig(serviceType, connectionString string, timeout, maxRetri
 
 // genConfigOption creates a configuration option with common settings
 func genConfigOption[T any](name, description string, defaultValue T) *base.ConfigOption[T] {
+	envVar := genEnvVarName(name)
 	return base.NewConfigOption(defaultValue).
 		WithName(name).
 		WithDescription(description).
-		WithEnvVar(genEnvVarName(name))
+		WithEnvVar(envVar)
+}
+
+// genSecretConfigOption creates a secret configuration option
+func genSecretConfigOption(name, description, defaultValue string) *base.ConfigOption[string] {
+	envVar := genEnvVarName(name)
+	return base.NewConfigOption(defaultValue).
+		WithName(name).
+		WithDescription(description).
+		WithEnvVar(envVar).
+		SetSecret(true)
 }
 
 // genEnvVarName generates environment variable name for configuration
 func genEnvVarName(configName string) string {
-	envName := "MQ_" + configName
-	if configName == "aws_region" || configName == "aws_access_key" || configName == "aws_secret_key" || configName == "aws_session_token" {
-		// Use standard AWS environment variable names
-		switch configName {
-		case "aws_region":
-			return "AWS_REGION"
-		case "aws_access_key":
-			return "AWS_ACCESS_KEY_ID"
-		case "aws_secret_key":
-			return "AWS_SECRET_ACCESS_KEY"
-		case "aws_session_token":
-			return "AWS_SESSION_TOKEN"
-		}
+	// Use standard AWS environment variable names for AWS-specific configs
+	switch configName {
+	case "aws_region":
+		return "AWS_REGION"
+	case "aws_access_key":
+		return "AWS_ACCESS_KEY_ID"
+	case "aws_secret_key":
+		return "AWS_SECRET_ACCESS_KEY"
+	case "aws_session_token":
+		return "AWS_SESSION_TOKEN"
+	default:
+		// For all other configs, use MQ_ prefix with uppercase conversion
+		return "MQ_" + strings.ToUpper(strings.ReplaceAll(configName, "_", "_"))
 	}
-	return envName
 }
 
 // newModuleWithOptions creates a new module with the given configuration options
 func newModuleWithOptions(
+	// Common configuration
 	serviceType *base.ConfigOption[string],
-	connectionString *base.ConfigOption[string],
 	timeout *base.ConfigOption[int],
 	maxRetries *base.ConfigOption[int],
+
+	// AWS SQS configuration
 	awsRegion *base.ConfigOption[string],
 	awsAccessKey *base.ConfigOption[string],
 	awsSecretKey *base.ConfigOption[string],
 	awsSessionToken *base.ConfigOption[string],
+
+	// Azure Service Bus configuration
+	azureConnectionString *base.ConfigOption[string],
 	azureNamespace *base.ConfigOption[string],
 	azureSharedKey *base.ConfigOption[string],
 	azureKeyName *base.ConfigOption[string],
 ) *Module {
 	cfgMod := base.NewConfigurableModule()
-	// Remove the ext field for now since it's not implemented in base package
 
 	m := &Module{
-		cfgMod:           cfgMod,
-		ServiceType:      serviceType,
-		ConnectionString: connectionString,
-		Timeout:          timeout,
-		MaxRetries:       maxRetries,
-		AWSRegion:        awsRegion,
-		AWSAccessKey:     awsAccessKey,
-		AWSSecretKey:     awsSecretKey,
-		AWSSessionToken:  awsSessionToken,
-		AzureNamespace:   azureNamespace,
-		AzureSharedKey:   azureSharedKey,
-		AzureKeyName:     azureKeyName,
+		cfgMod:      cfgMod,
+		ServiceType: serviceType,
+		Timeout:     timeout,
+		MaxRetries:  maxRetries,
+
+		AWSRegion:       awsRegion,
+		AWSAccessKey:    awsAccessKey,
+		AWSSecretKey:    awsSecretKey,
+		AWSSessionToken: awsSessionToken,
+
+		AzureConnectionString: azureConnectionString,
+		AzureNamespace:        azureNamespace,
+		AzureSharedKey:        azureSharedKey,
+		AzureKeyName:          azureKeyName,
 	}
 
 	// Register configuration options
 	base.SetTypedConfigOption(cfgMod, configKeyServiceType, serviceType)
-	base.SetTypedConfigOption(cfgMod, configKeyConnectionString, connectionString)
 	base.SetTypedConfigOption(cfgMod, configKeyTimeout, timeout)
 	base.SetTypedConfigOption(cfgMod, configKeyMaxRetries, maxRetries)
+
 	base.SetTypedConfigOption(cfgMod, configKeyAWSRegion, awsRegion)
 	base.SetTypedConfigOption(cfgMod, configKeyAWSAccessKey, awsAccessKey)
 	base.SetTypedConfigOption(cfgMod, configKeyAWSSecretKey, awsSecretKey)
 	base.SetTypedConfigOption(cfgMod, configKeyAWSSessionToken, awsSessionToken)
+
+	base.SetTypedConfigOption(cfgMod, configKeyAzureConnectionString, azureConnectionString)
 	base.SetTypedConfigOption(cfgMod, configKeyAzureNamespace, azureNamespace)
 	base.SetTypedConfigOption(cfgMod, configKeyAzureSharedKey, azureSharedKey)
 	base.SetTypedConfigOption(cfgMod, configKeyAzureKeyName, azureKeyName)
@@ -218,11 +252,11 @@ func (m *Module) connect(thread *starlark.Thread, fn *starlark.Builtin, args sta
 		}
 	}
 
-	// Connection string (Azure)
+	// Azure Service Bus connection string
 	if connectionString != "" {
 		config.ConnectionString = string(connectionString)
 	} else {
-		if val, err := m.ConnectionString.GetValue(); err == nil {
+		if val, err := m.AzureConnectionString.GetValue(); err == nil {
 			config.ConnectionString = val
 		}
 	}

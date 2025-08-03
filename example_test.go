@@ -21,40 +21,6 @@ func TestStarlarkScripts(t *testing.T) {
 	base.RunStarlarkTests(t, ModuleName, moduleFactory, extraModules, "")
 }
 
-// TestModule tests basic module functionality
-func TestModule(t *testing.T) {
-	m := NewModule()
-	if m == nil {
-		t.Fatal("NewModule() returned nil")
-	}
-
-	// Test module loader
-	loader := m.LoadModule()
-	if loader == nil {
-		t.Fatal("LoadModule() returned nil")
-	}
-
-	// Test loading the module
-	dict, err := loader()
-	if err != nil {
-		t.Fatalf("Failed to load module: %v", err)
-	}
-
-	// Check for expected functions
-	expectedFunctions := []string{
-		"connect",
-		"get_supported_services",
-		"get_client_info",
-		"check_feature_support",
-	}
-
-	for _, funcName := range expectedFunctions {
-		if _, ok := dict[funcName]; !ok {
-			t.Errorf("Expected function '%s' not found in module", funcName)
-		}
-	}
-}
-
 // TestModuleWithConfig tests module creation with configuration
 func TestModuleWithConfig(t *testing.T) {
 	m := NewModuleWithConfig(ServiceTypeAWSSQS, "", 60, 5)

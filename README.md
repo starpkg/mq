@@ -67,7 +67,7 @@ The module supports multiple configuration methods with the following priority:
 - `AWS_SESSION_TOKEN`: AWS session token (optional)
 
 #### Azure Service Bus Configuration
-- `MQ_CONNECTION_STRING`: Azure Service Bus connection string
+- `MQ_AZURE_CONNECTION_STRING`: Azure Service Bus connection string
 - `MQ_AZURE_NAMESPACE`: Azure Service Bus namespace
 - `MQ_AZURE_SHARED_KEY`: Azure Service Bus shared access key
 - `MQ_AZURE_KEY_NAME`: Azure Service Bus key name
