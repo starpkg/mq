@@ -26,7 +26,7 @@ Key differentiators include automatic retry handling, unified dead letter queue 
 
 - **No Classes → Service Factory Pattern**: Use `connect()` function to create service-specific clients with method-like behavior through closures
 - **No f-strings → Format Method**: All string formatting uses `"template {}".format(value)` instead of f-string syntax
-- **No try/except → Conditional Checks**: Use `check_feature_support()` and conditional logic instead of exception handling
+- **No try/except → Conditional Checks**: Use conditional logic instead of exception handling and `fail()` if can't handle the error
 - **No is/is not → Equality Comparison**: Use `== None` and `!= None` for null checks instead of identity comparisons
 - **No While Loops → Bounded For Loops**: Use `for i in range(n):` with break conditions for iterative processing
 - **No Import Statements → Built-in Functions**: Use runtime-provided functions instead of Python's import system
@@ -88,7 +88,6 @@ connect(
 # Utility functions
 get_supported_services() -> list    # Returns ["aws_sqs", "azure_servicebus"]
 get_client_info(client) -> dict    # Returns client connection details
-check_feature_support(client, feature) -> bool  # Check if feature is supported
 ```
 
 ### Unified Client API
