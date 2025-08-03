@@ -98,7 +98,6 @@ connect(
 # Utility functions
 get_supported_services() -> list    # Returns ["aws_sqs", "azure_servicebus"]
 get_client_info(client) -> dict     # Returns client connection details
-check_feature_support(client, feature_name) -> bool  # Check if feature is supported
 ```
 
 ### Unified Client API
@@ -145,9 +144,9 @@ schedule(queue_name, body, scheduled_time, properties=None, session_id=None) -> 
 cancel(queue_name, message_id) -> bool  # Where supported (Azure only)
 
 # Dead letter queue operations (unified interface)
-dlq_receive(queue_name, max_count=10) -> list
-dlq_reprocess(queue_name, message_id) -> bool
-dlq_purge(queue_name) -> bool
+dead_letter_receive(queue_name, max_count=10) -> list
+dead_letter_requeue(queue_name, message_id) -> bool  # Move message back to main queue
+dead_letter_purge(queue_name) -> bool
 ```
 
 ### Unified API Implementation
@@ -618,7 +617,7 @@ def main():
                 print("Processing failed for message {}, will retry".format(msg.message_id))
     
     # Handle dead letter messages
-    dead_messages = client.dlq_receive("processing-queue", max_count=10)
+    dead_messages = client.dead_letter_receive("processing-queue", max_count=10)
     print("Found {} messages in dead letter queue".format(len(dead_messages)))
     
     for dead_msg in dead_messages:
@@ -627,9 +626,9 @@ def main():
         
         # Decide what to do with dead letter messages
         if should_requeue(dead_msg):
-            # Move back to main queue
-            client.dlq_reprocess("processing-queue", dead_msg.message_id)
-            print("Reprocessed message {}".format(dead_msg.message_id))
+            # Move back to main queue for retry
+            client.dead_letter_requeue("processing-queue", dead_msg.message_id)
+            print("Requeued message {} back to main queue".format(dead_msg.message_id))
         else:
             # Log and remove
             log_dead_message(dead_msg)
@@ -649,10 +648,10 @@ def log_dead_message(message):
 main()
 ```
 
-### Multi-Service Configuration and Feature Detection
+### Multi-Service Configuration
 
 ```python
-load("mq", "connect", "get_supported_services", "get_client_info", "check_feature_support")
+load("mq", "connect", "get_supported_services", "get_client_info")
 
 def main():
     # List supported services
@@ -681,7 +680,7 @@ def main():
     # Demonstrate service-specific feature handling
     handle_service_differences(aws_client, azure_client)
     
-    # Cross-service message forwarding with feature detection
+    # Cross-service message forwarding
     forward_messages_between_services(aws_client, azure_client)
 
 def handle_service_differences(aws_client, azure_client):
@@ -702,11 +701,10 @@ def handle_service_differences(aws_client, azure_client):
         else:
             aws_client.lock("test-queue", msg.message_id, 120)
     
-    # Azure Service Bus: Check peek support
-    if check_feature_support(azure_client, "peek"):
-        # Peek messages without receiving them (Azure only)
-        peeked = azure_client.peek("test-queue", max_count=5)
-        print("Peeked {} messages from Azure queue".format(len(peeked)))
+    # Azure Service Bus: Peek messages (Azure only feature)
+    # Note: This will fail on AWS SQS with a clear error message
+    peeked = azure_client.peek("test-queue", max_count=5)
+    print("Peeked {} messages from Azure queue".format(len(peeked)))
     
     # Receive with session support (Azure Service Bus)
     azure_messages = azure_client.receive(
@@ -867,9 +865,9 @@ type Client interface {
     BatchSend(ctx context.Context, queueName string, messages []BatchMessage) ([]*MessageResult, error)
     
     // Dead letter queue operations
-    DLQReceive(ctx context.Context, queueName string, maxCount int) ([]*MessageResult, error)
-    DLQReprocess(ctx context.Context, queueName, messageID string) error
-    DLQPurge(ctx context.Context, queueName string) error
+    DeadLetterReceive(ctx context.Context, queueName string, maxCount int) ([]*MessageResult, error)
+    DeadLetterRequeue(ctx context.Context, queueName, messageID string) error
+    DeadLetterPurge(ctx context.Context, queueName string) error
     
     // Connection management
     Close() error
@@ -892,7 +890,7 @@ require (
 
 // Internal dependencies
 require (
-    github.com/starpkg/base v0.1.0
+    github.com/starpkg/base v0.0.5
 )
 ```
 
@@ -937,7 +935,7 @@ The `mq` module implements the following key normalizations to provide a consist
 - **Unified Parameter**: `dead_letter_config` (object)
 - **AWS SQS**: Creates separate DLQ + redrive policy
 - **Azure Service Bus**: Configures built-in dead letter subqueue
-- **API Functions**: `dlq_receive()`, `dlq_reprocess()`, `dlq_purge()`
+- **API Functions**: `dead_letter_receive()`, `dead_letter_requeue()`, `dead_letter_purge()`
 
 #### 6. Batch Operations
 
@@ -986,7 +984,7 @@ The `mq` module implements the following key normalizations to provide a consist
 ### Implementation Guidelines
 
 - **Error Handling**: Let cloud services validate parameters and return normalized errors
-- **Feature Detection**: Use `check_feature_support()` to gracefully handle service differences
+- **Service Differences**: Handle unsupported features with clear local error messages
 - **Starlark Integration**: Follow s3 module patterns for ClientWrapper and method exposure
 - **Configuration**: Use base package configuration system with proper secret handling
 - **Testing**: Comprehensive example tests with real Starlark scripts
