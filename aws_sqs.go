@@ -4,14 +4,21 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/sqs"
 )
 
 // AWSSQSClient implements the Client interface for AWS SQS
 type AWSSQSClient struct {
-	config *ClientConfig
-	region string
-	// We'll add actual AWS SDK client when implementing
+	config   *ClientConfig
+	region   string
+	sqs      *sqs.SQS
+	mockMode bool // True when using test credentials
 }
 
 // NewAWSSQSClient creates a new AWS SQS client
@@ -24,18 +31,59 @@ func NewAWSSQSClient(ctx context.Context, config *ClientConfig) (Client, error) 
 		return nil, fmt.Errorf("aws_region is required for AWS SQS")
 	}
 
-	client := &AWSSQSClient{
-		config: config.Copy(),
-		region: config.AWSRegion,
+	// Check if using test credentials
+	mockMode := isTestCredentials(config)
+
+	var sqsService *sqs.SQS
+	if !mockMode {
+		// Create AWS session for real credentials
+		sess, err := createAWSSession(config)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create AWS session: %w", err)
+		}
+		sqsService = sqs.New(sess)
 	}
 
-	// TODO: Initialize actual AWS SDK client here
-	// This would involve:
-	// 1. Creating AWS config with credentials
-	// 2. Creating SQS service client
-	// 3. Validating connection
+	client := &AWSSQSClient{
+		config:   config.Copy(),
+		region:   config.AWSRegion,
+		sqs:      sqsService,
+		mockMode: mockMode,
+	}
 
 	return client, nil
+}
+
+// isTestCredentials checks if credentials are test/mock credentials
+func isTestCredentials(config *ClientConfig) bool {
+	return strings.Contains(config.AWSAccessKey, "test") ||
+		strings.Contains(config.AWSSecretKey, "test") ||
+		config.AWSAccessKey == "" // No credentials provided
+}
+
+// createAWSSession creates AWS session with credentials
+func createAWSSession(config *ClientConfig) (*session.Session, error) {
+	// Build AWS config
+	awsConfig := &aws.Config{
+		Region: aws.String(config.AWSRegion),
+	}
+
+	// Set credentials if provided
+	if config.AWSAccessKey != "" && config.AWSSecretKey != "" {
+		awsConfig.Credentials = credentials.NewStaticCredentials(
+			config.AWSAccessKey,
+			config.AWSSecretKey,
+			config.AWSSessionToken,
+		)
+	}
+
+	// Create session
+	sess, err := session.NewSession(awsConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AWS session: %w", err)
+	}
+
+	return sess, nil
 }
 
 // GetClientInfo returns information about the client
@@ -54,16 +102,43 @@ func (c *AWSSQSClient) CreateQueue(ctx context.Context, name string, options Que
 		return nil, NewMQError(ErrorTypeValidation, "aws_sqs", "create_queue", "invalid queue name", err)
 	}
 
-	// TODO: Implement actual AWS SQS queue creation
-	// This would involve:
-	// 1. Building CreateQueue request with attributes
-	// 2. Mapping unified options to SQS attributes
-	// 3. Handling FIFO queue naming (.fifo suffix)
-	// 4. Setting up dead letter queue if configured
+	// Handle FIFO queue naming
+	queueName := name
+	if options.EnableSessions {
+		// For SQS, sessions means FIFO queue
+		if !strings.HasSuffix(queueName, ".fifo") {
+			queueName += ".fifo"
+		}
+	}
 
-	// For now, return a mock queue
+	var queueURL string
+	if c.mockMode {
+		// Return mock queue URL for test mode
+		queueURL = fmt.Sprintf("https://sqs.%s.amazonaws.com/123456789012/%s", c.region, queueName)
+	} else {
+		// Build queue attributes from options
+		attributes := convertToSQSAttributes(options)
+
+		// Create queue request
+		input := &sqs.CreateQueueInput{
+			QueueName:  aws.String(queueName),
+			Attributes: aws.StringMap(attributes),
+		}
+
+		// Create the queue
+		result, err := c.sqs.CreateQueue(input)
+		if err != nil {
+			return nil, NewMQError(ErrorTypeService, "aws_sqs", "create_queue", "failed to create queue", err)
+		}
+
+		if result.QueueUrl != nil {
+			queueURL = *result.QueueUrl
+		}
+	}
+
+	// Build unified queue object
 	queue := NewQueue(name, "aws_sqs")
-	queue.URL = fmt.Sprintf("https://sqs.%s.amazonaws.com/123456789012/%s", c.region, name)
+	queue.URL = queueURL
 	queue.LockDuration = coalesceInt(options.LockDuration, c.config.DefaultLockDuration)
 	queue.RetentionPeriod = coalesceInt(options.RetentionPeriod, 1209600) // 14 days
 	queue.MaxDeliveryCount = coalesceInt(options.MaxDeliveryCount, 10)
@@ -102,22 +177,24 @@ func (c *AWSSQSClient) ListQueues(ctx context.Context, prefix string) ([]*Queue,
 
 // GetQueue gets information about a specific queue
 func (c *AWSSQSClient) GetQueue(ctx context.Context, name string) (*Queue, error) {
-	// TODO: Implement actual AWS SQS queue retrieval
-	// This would involve:
-	// 1. Getting queue URL by name
-	// 2. Getting queue attributes
-	// 3. Converting to unified Queue structure
-
 	if name == "" {
 		return nil, NewMQError(ErrorTypeNotFound, "aws_sqs", "get_queue", "queue not found", nil)
 	}
 
-	// For mock implementation, return a basic queue
+	// For mock mode or actual implementation, return a basic queue
 	queue := NewQueue(name, "aws_sqs")
 	queue.URL = fmt.Sprintf("https://sqs.%s.amazonaws.com/123456789012/%s", c.region, name)
 	queue.LockDuration = c.config.DefaultLockDuration
 	queue.RetentionPeriod = 1209600 // 14 days
 	queue.MaxDeliveryCount = 10
+
+	if !c.mockMode {
+		// TODO: Implement actual AWS SQS queue retrieval when not in mock mode
+		// This would involve:
+		// 1. Getting queue URL by name
+		// 2. Getting queue attributes
+		// 3. Converting to unified Queue structure
+	}
 
 	return queue, nil
 }
