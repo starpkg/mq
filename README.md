@@ -1,281 +1,442 @@
-# 📨 MQ Module for Starlark
+# 🔗 MQ Module for Starlark
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/starpkg/mq.svg)](https://pkg.go.dev/github.com/starpkg/mq)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/starpkg/mq)](https://golang.org/doc/devel/release.html)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Go Report Card](https://goreportcard.com/badge/github.com/starpkg/mq)](https://goreportcard.com/report/github.com/starpkg/mq)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Unified message queue operations for Starlark scripts - seamlessly connect to AWS SQS and Azure Service Bus!**
+A powerful and unified Starlark module for message queue operations, providing seamless integration with AWS SQS and Azure Service Bus through a consistent API.
 
-The MQ module provides a comprehensive, easy-to-use interface for interacting with cloud message queue services from Starlark scripts. It supports Amazon SQS and Azure Service Bus with advanced features like batch operations, dead letter queue management, and unified message handling across different cloud providers.
+## 🚀 Features
 
-## ✨ Features
+- **Unified API**: Single interface for multiple message queue services
+- **Multi-Cloud Support**: AWS SQS and Azure Service Bus integration
+- **Auto-Detection**: Automatically detect service type from configuration
+- **Queue Management**: Create, delete, list, and manage queues
+- **Message Operations**: Send, receive, delete, and schedule messages
+- **Batch Operations**: Efficient batch message processing
+- **Dead Letter Queues**: Built-in support for message failure handling
+- **Session Support**: Ordered message processing (FIFO queues/sessions)
+- **Properties & Metadata**: Rich message metadata and custom properties
+- **Type Safety**: Strong typing with comprehensive error handling
 
-- **🌐 Universal Compatibility**: Works with AWS SQS and Azure Service Bus with automatic service detection
-- **🔒 Secure Configuration**: Module-level configuration with secret handling and environment variable support
-- **📨 Unified Queue Operations**: Create, delete, list queues with consistent API across cloud providers
-- **💌 Advanced Message Operations**: Send, receive, delete messages with unified parameter handling
-- **⚡ High Performance**: Intelligent batch operations with auto-adaptation to service limits
-- **🔄 Smart Retry Logic**: Automatic retry handling with exponential backoff for resilient operations
-- **💀 Dead Letter Queue Support**: Complete DLQ management with unified interface across providers
-- **🏷️ Message Properties**: Full support for message attributes, scheduling, and session handling
-- **🔐 Message Lock Management**: Unified visibility timeout and lock duration handling
-- **🛠️ Rich Utility Functions**: Service detection, feature validation, and configuration helpers
-- **🧠 Intelligent Adaptation**: Graceful degradation for service-specific features and limitations
-- **🎯 Starlark Native**: Designed specifically for Starlark with proper error handling and type safety
+## 📦 Installation
 
-## 🚀 Quick Start
-
-### Implementation Status
-
-- **✅ AWS SQS**: **Production Ready** with real AWS SDK v1 integration and automatic test mode detection
-- **✅ Azure Service Bus**: **Production Ready** with real Azure SDK integration and comprehensive thread-safety
-
-### Basic Usage
-
-```python
-load("mq", "connect")
-
-def main():
-    # Connect to AWS SQS (production ready with test mode for development)
-    client = connect(
-        service_type="aws_sqs",
-        aws_region="us-west-2",
-        aws_access_key="your-aws-access-key",     # Real credentials for production
-        aws_secret_key="your-aws-secret-key"     # Use "test-*" credentials for testing
-    )
-    
-    # Create a queue with unified parameters
-    queue = client.create_queue(
-        "my-work-queue",
-        lock_duration=60,
-        max_delivery_count=5,
-        dead_letter_config={
-            "enabled": True,
-            "queue_name": "my-dlq"
-        }
-    )
-    
-    if queue == None:
-        fail("Failed to create queue")
-    
-    # Send a message with unified properties
-    result = client.send(
-        "my-work-queue", 
-        "Hello, World!",
-        properties={
-            "priority": "high",
-            "sender": "worker-1"
-        }
-    )
-    
-    print("Message sent with ID: {}".format(result["message_id"]))
-    
-    # Receive messages with unified options
-    messages = client.receive(
-        "my-work-queue", 
-        max_count=5,
-        wait_time=20,
-        lock_duration=30
-    )
-    
-    for message in messages:
-        print("Processing message: {}".format(message["body"]))
-        print("Message properties: {}".format(message["properties"]))
-        
-        # Process the message...
-        success = process_message(message)
-        
-        if success:
-            # Delete message after successful processing
-            client.delete("my-work-queue", message["message_id"])
-        else:
-            # Extend lock duration for retry
-            client.lock("my-work-queue", message["message_id"], 60)
-            print("Extended lock for message {}, will retry".format(message["message_id"]))
-
-def process_message(message):
-    # Simulate message processing
-    print("Processing: {}".format(message["body"]))
-    return True
-
-main()
-```
-
-## 📋 Service Support
-
-The `mq` module provides a unified interface for queue operations across AWS SQS and Azure Service Bus:
-
-### Core Features Compatibility Matrix
-
-| Feature Category | AWS SQS | Azure Service Bus | Notes |
-|------------------|---------|-------------------|-------|
-| **Standard Queues** | ✅ | ✅ | Full support on both services |
-| **FIFO Queues** | ✅ | ❌ | SQS only - use sessions in Azure for ordering |
-| **Dead Letter Queues** | ✅ | ✅ | Different configuration methods |
-| **Message Attributes** | ✅ | ✅ | Different limits and types |
-| **Batch Operations** | ✅ (max 10) | ✅ (max 100) | Auto-adaptation to service limits |
-| **Long Polling** | ✅ | ✅ | Different parameter names |
-| **Delayed Messages** | ✅ (≤15min) | ✅ | Different mechanisms and limits |
-| **Message Sessions** | ❌ | ✅ | Azure Service Bus only |
-| **Duplicate Detection** | ✅ (FIFO only) | ✅ | Different implementations |
-| **Peek Messages** | ❌ | ✅ | Azure only - AWS returns local error |
-
-## 🏗️ Implementation Details
-
-### AWS SQS (Production Ready)
-
-The AWS SQS implementation is **fully functional** and production-ready:
-
-- **✅ Real AWS SDK Integration**: Uses AWS SDK for Go v1 for full compatibility with Go 1.18
-- **✅ Automatic Account Detection**: Uses AWS STS to get real account ID for proper ARN construction
-- **✅ Complete Queue Management**: Create, delete, list, and manage queues with all SQS features
-- **✅ Message Operations**: Send, receive, delete, batch operations with proper error handling
-- **✅ Dead Letter Queue Support**: Full DLQ management with automatic DLQ creation
-- **✅ FIFO Queue Support**: Handles session-based ordering through FIFO queues
-- **✅ Service Adaptation**: Properly handles AWS SQS specific limitations and features
-- **✅ Thread Safety**: Safe for concurrent use
-- **✅ Error Handling**: Comprehensive error mapping and reporting
-
-### Azure Service Bus (Production Ready)
-
-The Azure Service Bus implementation is **fully functional** and production-ready:
-
-- **✅ Real Azure SDK Integration**: Uses Azure SDK for Go v1.4.1 compatible with Go 1.18
-- **✅ Thread-Safe Architecture**: Uses mutexes following Azure SDK best practices from reference implementation
-- **✅ Complete Interface**: All client methods implemented with proper signatures and real SDK calls
-- **✅ Queue Management**: Full queue lifecycle management with Service Bus admin operations
-- **✅ Message Operations**: Send, receive, delete with proper Service Bus features
-- **✅ Session Support**: Built-in session management for ordered message processing
-- **✅ Dead Letter Queue**: Native DLQ support with requeue capabilities
-
-### Production Usage
-
-Both implementations use real cloud service APIs:
-
-```python
-# AWS SQS with real credentials and automatic account ID detection
-client = connect(
-    service_type="aws_sqs",
-    aws_region="us-west-2",
-    aws_access_key="AKIAIOSFODNN7EXAMPLE",  # Real AWS credentials required
-    aws_secret_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-)
-
-# Azure Service Bus with real connection string
-client = connect(
-    service_type="azure_servicebus",
-    connection_string="Endpoint=sb://your-namespace.servicebus.windows.net/;..."
-)
-
-# Auto-detection based on provided parameters
-client = connect(
-    service_type="auto",
-    aws_region="us-west-2",
-    aws_access_key="AKIAIOSFODNN7EXAMPLE",
-    aws_secret_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-)
+```bash
+go get github.com/starpkg/mq
 ```
 
 ## 🔧 Configuration
+
+The module supports configuration through multiple methods with clear precedence:
+
+1. **Explicit values** (highest priority)
+2. **Dynamic getters**
+3. **Environment variables**
+4. **Default values** (lowest priority)
 
 ### Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `MQ_SERVICE_TYPE` | Service type (aws_sqs, azure_servicebus, auto) | auto |
-| `MQ_CONNECTION_STRING` | Azure Service Bus connection string | - |
-| `MQ_AWS_REGION` | AWS region for SQS | us-east-1 |
-| `AWS_ACCESS_KEY_ID` | AWS access key ID | - |
-| `AWS_SECRET_ACCESS_KEY` | AWS secret access key | - |
-| `AWS_SESSION_TOKEN` | AWS session token (optional) | - |
 | `MQ_TIMEOUT` | Connection timeout in seconds | 30 |
 | `MQ_MAX_RETRIES` | Maximum retry attempts | 3 |
-| `MQ_DEFAULT_LOCK_DURATION` | Default message lock duration | 30 |
+| `MQ_CONNECTION_STRING` | Azure Service Bus connection string | "" |
+| `MQ_AWS_REGION` | AWS region for SQS | us-east-1 |
+| `MQ_AWS_ACCESS_KEY` | AWS access key ID | "" |
+| `MQ_AWS_SECRET_KEY` | AWS secret access key | "" |
+| `MQ_AWS_SESSION_TOKEN` | AWS session token | "" |
+| `MQ_DEFAULT_LOCK_DURATION` | Default message lock duration (seconds) | 30 |
 | `MQ_DEFAULT_BATCH_SIZE` | Default batch size for operations | 10 |
 
-## 📖 API Reference
+## 🎯 Usage
+
+### Basic Connection
+
+```python
+load("mq", "connect", "get_supported_services")
+
+def main():
+    # Get supported services
+    services = get_supported_services()
+    print("Supported services: {}".format(services))
+    
+    # Connect to AWS SQS
+    client = connect(
+        service_type="aws_sqs",
+        aws_region="us-west-2",
+        aws_access_key="YOUR_ACCESS_KEY",
+        aws_secret_key="YOUR_SECRET_KEY"
+    )
+    
+    # Connect to Azure Service Bus
+    azure_client = connect(
+        service_type="azure_servicebus",
+        connection_string="Endpoint=sb://...;SharedAccessKeyName=...;SharedAccessKey=..."
+    )
+    
+    # Auto-detection based on provided credentials
+    auto_client = connect(
+        service_type="auto",
+        aws_region="us-west-2",
+        aws_access_key="YOUR_ACCESS_KEY",
+        aws_secret_key="YOUR_SECRET_KEY"
+    )
+
+main()
+```
+
+### Queue Operations
+
+```python
+load("mq", "connect")
+
+def main():
+    client = connect(
+        service_type="aws_sqs",
+        aws_region="us-west-2",
+        aws_access_key="YOUR_ACCESS_KEY",
+        aws_secret_key="YOUR_SECRET_KEY"
+    )
+    
+    # Create a queue
+    queue = client.create_queue(
+        "my-test-queue",
+        lock_duration=60,
+        retention_period=86400,  # 1 day
+        max_delivery_count=5
+    )
+    print("Created queue: {}".format(queue["name"]))
+    
+    # List queues
+    queues = client.list_queues(prefix="my-")
+    print("Found {} queues".format(len(queues)))
+    
+    # Check if queue exists
+    if client.exists("my-test-queue"):
+        print("Queue exists!")
+    
+    # Get queue information
+    info = client.get_queue("my-test-queue")
+    print("Queue URL: {}".format(info["url"]))
+    
+    # Delete queue (cleanup)
+    client.delete_queue("my-test-queue")
+
+main()
+```
+
+### Message Operations
+
+```python
+load("mq", "connect")
+load("time", "now")
+
+def main():
+    client = connect(
+        service_type="aws_sqs",
+        aws_region="us-west-2",
+        aws_access_key="YOUR_ACCESS_KEY",
+        aws_secret_key="YOUR_SECRET_KEY"
+    )
+    
+    queue_name = "my-message-queue"
+    
+    # Create queue first
+    client.create_queue(queue_name)
+    
+    # Send a message
+    result = client.send(
+        queue_name,
+        "Hello, World!",
+        properties={"sender": "starlark", "priority": "high"},
+        correlation_id="req-123",
+        time_to_live=3600  # 1 hour
+    )
+    print("Sent message: {}".format(result["message_id"]))
+    
+    # Send scheduled message
+    future_time = "2024-12-31T23:59:59Z"
+    scheduled = client.schedule(
+        queue_name,
+        "Happy New Year!",
+        future_time,
+        properties={"event": "new_year"}
+    )
+    print("Scheduled message: {}".format(scheduled["message_id"]))
+    
+    # Receive messages
+    messages = client.receive(
+        queue_name,
+        max_count=10,
+        wait_time=5,
+        lock_duration=30
+    )
+    
+    for msg in messages:
+        print("Received: {}".format(msg["body"]))
+        print("Properties: {}".format(msg["properties"]))
+        
+        # Process message...
+        
+        # Delete after processing
+        client.delete(queue_name, [msg["receipt_handle"]])
+    
+    # Batch send messages
+    batch_messages = [
+        {
+            "body": "Message 1",
+            "properties": {"batch": "1"},
+            "correlation_id": "batch-1"
+        },
+        {
+            "body": "Message 2", 
+            "properties": {"batch": "2"},
+            "correlation_id": "batch-2"
+        }
+    ]
+    
+    results = client.batch_send(queue_name, batch_messages)
+    print("Sent {} messages in batch".format(len(results)))
+
+main()
+```
+
+### Dead Letter Queue Configuration
+
+```python
+load("mq", "connect")
+
+def main():
+    client = connect(
+        service_type="aws_sqs",
+        aws_region="us-west-2",
+        aws_access_key="YOUR_ACCESS_KEY",
+        aws_secret_key="YOUR_SECRET_KEY"
+    )
+    
+    # Create queue with dead letter queue
+    queue = client.create_queue(
+        "main-queue",
+        max_delivery_count=3,
+        dead_letter_config={
+            "enabled": True,
+            "queue_name": "main-queue-dlq",
+            "max_delivery_count": 3
+        }
+    )
+    
+    # Send a message that will fail processing
+    client.send("main-queue", "This will fail processing")
+    
+    # Simulate failed processing by receiving and not deleting
+    for attempt in range(4):  # Exceed max delivery count
+        messages = client.receive("main-queue", max_count=1)
+        if len(messages) > 0:
+            print("Attempt {}: {}".format(attempt + 1, messages[0]["body"]))
+            # Don't delete - let it go back to queue
+    
+    # Check dead letter queue
+    dlq_messages = client.dead_letter_receive("main-queue", max_count=10)
+    print("Messages in DLQ: {}".format(len(dlq_messages)))
+    
+    # Requeue from dead letter queue
+    for msg in dlq_messages:
+        client.dead_letter_requeue("main-queue", msg["message_id"])
+        print("Requeued message: {}".format(msg["message_id"]))
+
+main()
+```
+
+### Azure Service Bus Sessions
+
+```python
+load("mq", "connect")
+
+def main():
+    client = connect(
+        service_type="azure_servicebus",
+        connection_string="Endpoint=sb://...;SharedAccessKeyName=...;SharedAccessKey=..."
+    )
+    
+    # Create queue with sessions enabled
+    queue = client.create_queue(
+        "session-queue",
+        enable_sessions=True,
+        duplicate_detection=True,
+        duplicate_window_secs=300
+    )
+    
+    # Send messages with session ID for ordering
+    session_id = "customer-123"
+    
+    messages = [
+        "Order created",
+        "Payment processed", 
+        "Order shipped",
+        "Order delivered"
+    ]
+    
+    for i, msg in enumerate(messages):
+        result = client.send(
+            "session-queue",
+            msg,
+            session_id=session_id,
+            message_id="order-{}-step-{}".format(session_id, i),
+            properties={"step": i + 1}
+        )
+        print("Sent: {}".format(result["message_id"]))
+    
+    # Receive messages (they'll be delivered in order)
+    session_messages = client.receive(
+        "session-queue",
+        max_count=10
+    )
+    
+    for msg in session_messages:
+        print("Processing step {}: {}".format(
+            msg["properties"]["step"], 
+            msg["body"]
+        ))
+
+main()
+```
+
+## 🔍 API Reference
 
 ### Module Functions
 
-#### `connect()`
+#### `connect(**kwargs) -> Client`
+Creates a new message queue client.
 
-Creates a message queue client connection.
+**Parameters:**
+- `service_type` (str): Service type ("aws_sqs", "azure_servicebus", "auto")
+- `connection_string` (str): Azure Service Bus connection string
+- `aws_region` (str): AWS region
+- `aws_access_key` (str): AWS access key ID
+- `aws_secret_key` (str): AWS secret access key
+- `aws_session_token` (str): AWS session token (optional)
+- `timeout` (int): Connection timeout in seconds
+- `max_retries` (int): Maximum retry attempts
 
-```python
-client = connect(
-    service_type="auto",         # "aws_sqs", "azure_servicebus", "auto"
-    connection_string=None,      # Azure Service Bus connection string
-    aws_region=None,             # AWS region for SQS
-    aws_access_key=None,         # AWS access key ID
-    aws_secret_key=None,         # AWS secret access key
-    timeout=30,                  # Connection timeout in seconds
-    max_retries=3                # Maximum retry attempts
-)
+#### `get_supported_services() -> List[str]`
+Returns list of supported message queue services.
+
+#### `get_client_info(client) -> Dict`
+Returns information about the given client.
+
+### Client Methods
+
+#### Queue Operations
+- `create_queue(name, **options) -> Queue`
+- `delete_queue(name) -> bool`
+- `list_queues(prefix="") -> List[Queue]`
+- `get_queue(name) -> Queue`
+- `exists(name) -> bool`
+- `purge(name) -> bool`
+- `get_info(name) -> Queue`
+
+#### Message Operations
+- `send(queue_name, body, **options) -> MessageResult`
+- `receive(queue_name, **options) -> List[MessageResult]`
+- `delete(queue_name, message_ids) -> List[bool]`
+- `batch_send(queue_name, messages) -> List[MessageResult]`
+- `schedule(queue_name, body, scheduled_time, **options) -> MessageResult`
+- `cancel(queue_name, message_id) -> bool`
+- `peek(queue_name, max_count=1) -> List[MessageResult]`
+
+#### Message Lock Management
+- `lock(queue_name, message_id, duration) -> bool`
+- `unlock(queue_name, message_id) -> bool`
+
+#### Dead Letter Queue Operations
+- `dead_letter_receive(queue_name, max_count=10) -> List[MessageResult]`
+- `dead_letter_requeue(queue_name, message_id) -> bool`
+- `dead_letter_purge(queue_name) -> bool`
+
+## 🛠️ Development
+
+### Building
+
+```bash
+go build .
 ```
 
-#### `get_supported_services()`
+### Testing
 
-Returns a list of supported message queue services.
+```bash
+# Run all tests
+go test -v ./...
 
-```python
-services = get_supported_services()
-# Returns: ["aws_sqs", "azure_servicebus"]
+# Run specific test
+go test -v -run TestStarlarkScripts/test-basic_module_load.star
 ```
 
-#### `get_client_info(client)`
+### Linting
 
-Returns information about a client connection.
-
-```python
-info = get_client_info(client)
-# Returns: {"service_type": "aws_sqs", "region": "us-west-2", ...}
+```bash
+golangci-lint run
 ```
 
-## 🎯 Best Practices
+## 🤝 Contributing
 
-### 1. Use Appropriate Batch Sizes
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
-```python
-# Good: Let the module auto-adapt batch sizes
-results = client.batch_send(queue_name, large_message_list)
-
-# The module automatically splits into service-appropriate batches:
-# - AWS SQS: max 10 messages per batch
-# - Azure Service Bus: max 100 messages per batch
-```
-
-### 2. Use Dead Letter Queues for Reliability
-
-```python
-# Always configure DLQ for production workloads
-queue = client.create_queue(
-    "production-queue",
-    max_delivery_count=3,  # Reasonable retry limit
-    dead_letter_config={
-        "enabled": True,
-        "queue_name": "production-dlq"
-    }
-)
-```
-
-### 3. Implement Proper Message Processing
-
-```python
-def process_messages_safely(client, queue_name):
-    messages = client.receive(queue_name, max_count=10)
-    
-    for msg in messages:
-        # Process message
-        result = process_message(msg)
-        
-        if result:
-            # Only delete after successful processing
-            client.delete(queue_name, msg["message_id"])
-        else:
-            # Extend lock for retry
-            client.lock(queue_name, msg["message_id"], 60)
-```
-
-## 📄 License
+## 📝 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🔗 Related Projects
+
+- [Starlark Language](https://github.com/bazelbuild/starlark)
+- [Starlet](https://github.com/1set/starlet) - Starlark Libraries and Extensions
+- [AWS SDK for Go](https://github.com/aws/aws-sdk-go)
+- [Azure SDK for Go](https://github.com/Azure/azure-sdk-for-go)
+
+## ⚠️ Compatibility Notes
+
+### AWS SQS
+- Maximum message delay: 15 minutes
+- Maximum batch size: 10 messages
+- FIFO queues require `.fifo` suffix
+- Message deduplication only available for FIFO queues
+
+### Azure Service Bus
+- Sessions required for message ordering
+- Duplicate detection configurable per queue
+- Built-in dead letter queue support
+- Message scheduling up to 7 days in advance
+
+## 📈 Performance Tips
+
+1. **Use batch operations** for sending multiple messages
+2. **Configure appropriate timeouts** for your use case
+3. **Enable long polling** to reduce costs and improve responsiveness
+4. **Use sessions/FIFO queues** only when message ordering is required
+5. **Monitor dead letter queues** for failed message processing
+6. **Set appropriate message TTL** to prevent queue bloat
+
+## 🐛 Troubleshooting
+
+### Common Issues
+
+**Connection timeouts:**
+- Increase the `timeout` configuration
+- Check network connectivity
+- Verify credentials and permissions
+
+**Message not appearing:**
+- Check visibility timeout settings
+- Verify queue exists and is correct
+- Check dead letter queue for failed messages
+
+**Authentication errors:**
+- Verify AWS credentials or Azure connection string
+- Check IAM permissions for AWS SQS
+- Verify shared access policy for Azure Service Bus
+
+For more detailed troubleshooting, enable debug logging and check the error messages returned by the module functions.

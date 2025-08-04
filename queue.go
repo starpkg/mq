@@ -44,8 +44,8 @@ type DuplicateDetection struct {
 	WindowSeconds int  `json:"window_seconds"` // Deduplication window in seconds
 }
 
-// ToStarlark converts Queue to a Starlark dict
-func (q *Queue) ToStarlark() (starlark.Value, error) {
+// Struct converts Queue to a Starlark dict value for compatibility
+func (q *Queue) Struct() (starlark.Value, error) {
 	result := make(map[string]interface{})
 
 	result["name"] = q.Name
@@ -243,7 +243,7 @@ func NewQueue(name, serviceType string) *Queue {
 func queueSliceToStarlark(queues []*Queue) (starlark.Value, error) {
 	values := make([]starlark.Value, len(queues))
 	for i, queue := range queues {
-		val, err := queue.ToStarlark()
+		val, err := queue.Struct()
 		if err != nil {
 			return nil, err
 		}

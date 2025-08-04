@@ -74,39 +74,38 @@ func NewClientWrapper(client Client) *ClientWrapper {
 	// Initialize method map
 	cw.methodMap = map[string]func() starlark.Value{
 		// Client information
-		// "get_client_info": func() starlark.Value { return starlark.NewBuiltin("mq.get_client_info", cw.getClientInfo) },
 		"get_client_info": fw("get_client_info", cw.getClientInfo),
 
 		// Queue operations
-		"create_queue": func() starlark.Value { return starlark.NewBuiltin("mq.create_queue", cw.createQueue) },
-		"delete_queue": func() starlark.Value { return starlark.NewBuiltin("mq.delete_queue", cw.deleteQueue) },
-		"list_queues":  func() starlark.Value { return starlark.NewBuiltin("mq.list_queues", cw.listQueues) },
-		"get_queue":    func() starlark.Value { return starlark.NewBuiltin("mq.get_queue", cw.getQueue) },
-		"exists":       func() starlark.Value { return starlark.NewBuiltin("mq.exists", cw.exists) },
-		"purge":        func() starlark.Value { return starlark.NewBuiltin("mq.purge", cw.purge) },
-		"get_info":     func() starlark.Value { return starlark.NewBuiltin("mq.get_info", cw.getInfo) },
+		"create_queue": fw("create_queue", cw.createQueue),
+		"delete_queue": fw("delete_queue", cw.deleteQueue),
+		"list_queues":  fw("list_queues", cw.listQueues),
+		"get_queue":    fw("get_queue", cw.getQueue),
+		"exists":       fw("exists", cw.exists),
+		"purge":        fw("purge", cw.purge),
+		"get_info":     fw("get_info", cw.getInfo),
 
 		// Message operations
-		"send":    func() starlark.Value { return starlark.NewBuiltin("mq.send", cw.send) },
-		"receive": func() starlark.Value { return starlark.NewBuiltin("mq.receive", cw.receive) },
-		"delete":  func() starlark.Value { return starlark.NewBuiltin("mq.delete", cw.delete) },
+		"send":    fw("send", cw.send),
+		"receive": fw("receive", cw.receive),
+		"delete":  fw("delete", cw.delete),
 
 		// Message lock management
-		"lock":   func() starlark.Value { return starlark.NewBuiltin("mq.lock", cw.lock) },
-		"unlock": func() starlark.Value { return starlark.NewBuiltin("mq.unlock", cw.unlock) },
+		"lock":   fw("lock", cw.lock),
+		"unlock": fw("unlock", cw.unlock),
 
 		// Batch operations
-		"batch_send": func() starlark.Value { return starlark.NewBuiltin("mq.batch_send", cw.batchSend) },
+		"batch_send": fw("batch_send", cw.batchSend),
 
 		// Specialized message operations
-		"schedule": func() starlark.Value { return starlark.NewBuiltin("mq.schedule", cw.schedule) },
-		"cancel":   func() starlark.Value { return starlark.NewBuiltin("mq.cancel", cw.cancel) },
-		"peek":     func() starlark.Value { return starlark.NewBuiltin("mq.peek", cw.peek) },
+		"schedule": fw("schedule", cw.schedule),
+		"cancel":   fw("cancel", cw.cancel),
+		"peek":     fw("peek", cw.peek),
 
 		// Dead letter queue operations
-		"dead_letter_receive": func() starlark.Value { return starlark.NewBuiltin("mq.dead_letter_receive", cw.deadLetterReceive) },
-		"dead_letter_requeue": func() starlark.Value { return starlark.NewBuiltin("mq.dead_letter_requeue", cw.deadLetterRequeue) },
-		"dead_letter_purge":   func() starlark.Value { return starlark.NewBuiltin("mq.dead_letter_purge", cw.deadLetterPurge) },
+		"dead_letter_receive": fw("dead_letter_receive", cw.deadLetterReceive),
+		"dead_letter_requeue": fw("dead_letter_requeue", cw.deadLetterRequeue),
+		"dead_letter_purge":   fw("dead_letter_purge", cw.deadLetterPurge),
 	}
 
 	// Collect all attribute names
@@ -243,7 +242,7 @@ func (cw *ClientWrapper) createQueue(thread *starlark.Thread, b *starlark.Builti
 		return none, nil
 	}
 
-	return queue.ToStarlark()
+	return queue.Struct()
 }
 
 // deleteQueue deletes a queue
@@ -312,7 +311,7 @@ func (cw *ClientWrapper) getQueue(thread *starlark.Thread, b *starlark.Builtin, 
 		return none, nil
 	}
 
-	return queue.ToStarlark()
+	return queue.Struct()
 }
 
 // exists checks if a queue exists
@@ -379,7 +378,7 @@ func (cw *ClientWrapper) getInfo(thread *starlark.Thread, b *starlark.Builtin, a
 		return none, nil
 	}
 
-	return queue.ToStarlark()
+	return queue.Struct()
 }
 
 // Helper function to continue with the remaining methods...
@@ -457,7 +456,7 @@ func (cw *ClientWrapper) send(thread *starlark.Thread, b *starlark.Builtin, args
 		return none, NormalizeError("", "send", err)
 	}
 
-	return result.ToStarlark()
+	return result.Struct()
 }
 
 // receive receives messages from a queue
@@ -715,7 +714,7 @@ func (cw *ClientWrapper) schedule(thread *starlark.Thread, b *starlark.Builtin, 
 		return none, NormalizeError("", "schedule", err)
 	}
 
-	return result.ToStarlark()
+	return result.Struct()
 }
 
 // cancel cancels a scheduled message

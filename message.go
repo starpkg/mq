@@ -39,18 +39,23 @@ type MessageResult struct {
 	Error   string `json:"error,omitempty"`
 }
 
-// ToStarlark converts MessageResult to a Starlark dict
-func (m *MessageResult) ToStarlark() (starlark.Value, error) {
+// Struct converts MessageResult to a Starlark dict value for compatibility
+func (m *MessageResult) Struct() (starlark.Value, error) {
 	result := make(map[string]interface{})
 
 	result["message_id"] = m.MessageID
 	result["body"] = m.Body
-	result["properties"] = m.Properties
 	result["session_id"] = m.SessionID
 	result["correlation_id"] = m.CorrelationID
 	result["reply_to"] = m.ReplyTo
 	result["enqueue_time"] = m.EnqueueTime.Format(time.RFC3339)
+	result["delivery_count"] = m.DeliveryCount
+	result["time_to_live"] = m.TimeToLive
+	result["receipt_handle"] = m.ReceiptHandle
+	result["success"] = m.Success
+	result["error"] = m.Error
 
+	// Handle optional time fields
 	if m.ScheduledTime != nil {
 		result["scheduled_time"] = m.ScheduledTime.Format(time.RFC3339)
 	} else {
@@ -63,11 +68,8 @@ func (m *MessageResult) ToStarlark() (starlark.Value, error) {
 		result["lock_expires_at"] = nil
 	}
 
-	result["delivery_count"] = m.DeliveryCount
-	result["time_to_live"] = m.TimeToLive
-	result["receipt_handle"] = m.ReceiptHandle
-	result["success"] = m.Success
-	result["error"] = m.Error
+	// Handle properties
+	result["properties"] = m.Properties
 
 	return dataconv.Marshal(result)
 }

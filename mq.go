@@ -52,9 +52,9 @@ type Module struct {
 func NewModule() *Module {
 	return newModuleWithOptions(
 		genConfigOption(configKeyServiceType, "Service type (aws_sqs, azure_servicebus, auto)", ServiceTypeAuto),
-		genSecretConfigOption(configKeyConnectionString, "Azure Service Bus connection string", ""),
 		genConfigOption(configKeyTimeout, "Connection timeout in seconds", 30),
 		genConfigOption(configKeyMaxRetries, "Maximum retry attempts", 3),
+		genSecretConfigOption(configKeyConnectionString, "Azure Service Bus connection string", ""),
 		genConfigOption(configKeyAWSRegion, "AWS region for SQS", "us-east-1"),
 		genSecretConfigOption(configKeyAWSAccessKey, "AWS access key ID", ""),
 		genSecretConfigOption(configKeyAWSSecretKey, "AWS secret access key", ""),
@@ -88,9 +88,9 @@ func genSecretConfigOption(name, description, defaultValue string) *base.ConfigO
 // newModuleWithOptions creates a Module with the given configuration options
 func newModuleWithOptions(
 	serviceTypeOpt *base.ConfigOption[string],
-	connectionStringOpt *base.ConfigOption[string],
 	timeoutOpt *base.ConfigOption[int],
 	maxRetriesOpt *base.ConfigOption[int],
+	azureConnStrOpt *base.ConfigOption[string],
 	awsRegionOpt *base.ConfigOption[string],
 	awsAccessKeyOpt *base.ConfigOption[string],
 	awsSecretKeyOpt *base.ConfigOption[string],
@@ -100,9 +100,9 @@ func newModuleWithOptions(
 ) *Module {
 	cm, _ := base.NewConfigurableModuleWithConfigOptions(
 		serviceTypeOpt,
-		connectionStringOpt,
 		timeoutOpt,
 		maxRetriesOpt,
+		azureConnStrOpt,
 		awsRegionOpt,
 		awsAccessKeyOpt,
 		awsSecretKeyOpt,

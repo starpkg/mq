@@ -1,10 +1,12 @@
 package mq
 
 import (
+	"crypto/rand"
 	"fmt"
-	"math/rand"
+	"regexp"
 	"time"
 
+	"github.com/1set/starlet/dataconv"
 	"go.starlark.net/starlark"
 )
 
@@ -38,24 +40,31 @@ func splitBatchMessages(messages []BatchMessage, batchSize int) [][]BatchMessage
 	return splitIntoBatches(messages, batchSize)
 }
 
-// validateQueueName validates a queue name according to common rules
+// validateQueueName validates a queue name according to AWS and Azure naming rules
 func validateQueueName(name string) error {
 	if name == "" {
 		return fmt.Errorf("queue name cannot be empty")
 	}
 
+	// Length checks: AWS allows up to 80 chars, Azure up to 260
 	if len(name) > 80 {
 		return fmt.Errorf("queue name cannot be longer than 80 characters")
 	}
 
-	// Basic validation - alphanumeric, hyphens, underscores
-	for _, char := range name {
-		if !((char >= 'a' && char <= 'z') ||
-			(char >= 'A' && char <= 'Z') ||
-			(char >= '0' && char <= '9') ||
-			char == '-' || char == '_') {
-			return fmt.Errorf("queue name contains invalid character: %c", char)
-		}
+	// Unified naming rules compatible with both AWS and Azure:
+	// - Start and end with alphanumeric
+	// - Can contain alphanumeric, hyphens, underscores
+	// - No consecutive hyphens or underscores
+	nameRegex := regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]*[a-zA-Z0-9]$|^[a-zA-Z0-9]$`)
+
+	if !nameRegex.MatchString(name) {
+		return fmt.Errorf("queue name must start and end with alphanumeric characters and contain only letters, numbers, hyphens, and underscores")
+	}
+
+	// Check for consecutive special characters
+	consecutiveRegex := regexp.MustCompile(`[_-]{2,}`)
+	if consecutiveRegex.MatchString(name) {
+		return fmt.Errorf("queue name cannot contain consecutive hyphens or underscores")
 	}
 
 	return nil
@@ -66,12 +75,7 @@ func validateMessageBody(body string) error {
 	if len(body) == 0 {
 		return fmt.Errorf("message body cannot be empty")
 	}
-
-	// Check size limit (256KB is common limit)
-	if len(body) > 256*1024 {
-		return fmt.Errorf("message body too large (max 256KB)")
-	}
-
+	// Only check if empty, no length limits as per requirements
 	return nil
 }
 
@@ -104,10 +108,20 @@ func normalizeProperties(properties map[string]interface{}) map[string]interface
 	return normalized
 }
 
-// generateMessageID generates a unique message ID
+// generateMessageID generates a unique message ID starting with "Star"
 func generateMessageID() string {
-	// Simple implementation - in practice, this might use UUIDs
-	return fmt.Sprintf("msg-%d-%d", time.Now().Unix(), rand.Int63())
+	// Generate true random bytes
+	randomBytes := make([]byte, 8)
+	if _, err := rand.Read(randomBytes); err != nil {
+		// Fallback to timestamp-based random if crypto/rand fails
+		randomBytes = []byte(fmt.Sprintf("%08d", time.Now().Nanosecond()))
+	}
+
+	// Convert to hex string
+	randomHex := fmt.Sprintf("%x", randomBytes)
+
+	// Format: Star-{timestamp}-{random_hex}
+	return fmt.Sprintf("Star-%d-%s", time.Now().Unix(), randomHex)
 }
 
 // getServiceBatchLimit returns the batch size limit for a service
@@ -161,7 +175,7 @@ func max(a, b int) int {
 func messageResultSliceToStarlark(messages []*MessageResult) (starlark.Value, error) {
 	values := make([]starlark.Value, len(messages))
 	for i, msg := range messages {
-		val, err := msg.ToStarlark()
+		val, err := msg.Struct()
 		if err != nil {
 			return nil, err
 		}
@@ -185,64 +199,17 @@ func convertStarlarkDictToInterface(dict *starlark.Dict) (map[string]interface{}
 		return nil, nil
 	}
 
-	result := make(map[string]interface{}, dict.Len())
-	for _, item := range dict.Items() {
-		keyStr, ok := item[0].(starlark.String)
-		if !ok {
-			return nil, fmt.Errorf("dictionary key must be a string, got %T", item[0])
-		}
-
-		key := keyStr.GoString()
-		val := item[1]
-
-		// Convert Starlark values to Go types
-		switch v := val.(type) {
-		case starlark.String:
-			result[key] = v.GoString()
-		case starlark.Int:
-			intVal, ok := v.Int64()
-			if !ok {
-				return nil, fmt.Errorf("integer value too large for key %s", key)
-			}
-			result[key] = int(intVal)
-		case starlark.Float:
-			result[key] = float64(v)
-		case starlark.Bool:
-			result[key] = bool(v)
-		case *starlark.Dict:
-			// Nested dictionary
-			nestedMap, err := convertStarlarkDictToInterface(v)
-			if err != nil {
-				return nil, fmt.Errorf("error converting nested dict for key %s: %w", key, err)
-			}
-			result[key] = nestedMap
-		case *starlark.List:
-			// Convert list to slice
-			listVal := make([]interface{}, v.Len())
-			for i := 0; i < v.Len(); i++ {
-				elem := v.Index(i)
-				switch e := elem.(type) {
-				case starlark.String:
-					listVal[i] = e.GoString()
-				case starlark.Int:
-					intVal, ok := e.Int64()
-					if !ok {
-						return nil, fmt.Errorf("integer value too large in list for key %s", key)
-					}
-					listVal[i] = int(intVal)
-				case starlark.Float:
-					listVal[i] = float64(e)
-				case starlark.Bool:
-					listVal[i] = bool(e)
-				default:
-					listVal[i] = e.String() // Fallback to string representation
-				}
-			}
-			result[key] = listVal
-		default:
-			result[key] = val.String() // Fallback to string representation
-		}
+	// Use dataconv.Unmarshal for conversion
+	result, err := dataconv.Unmarshal(dict)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert Starlark dict to map[string]interface{}: %w", err)
 	}
 
-	return result, nil
+	// Verify that the result is indeed a map[string]interface{}
+	resultMap, ok := result.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("dataconv.Unmarshal did not return map[string]interface{}, got %T", result)
+	}
+
+	return resultMap, nil
 }

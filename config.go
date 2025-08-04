@@ -47,6 +47,19 @@ func (c *ClientConfig) Validate() error {
 		if c.AWSRegion == "" {
 			return fmt.Errorf("aws_region is required for AWS SQS")
 		}
+		// Check AWS credentials: either both AK/SK provided, or neither (use default credential chain)
+		hasAccessKey := c.AWSAccessKey != ""
+		hasSecretKey := c.AWSSecretKey != ""
+
+		if hasAccessKey != hasSecretKey {
+			return fmt.Errorf("both aws_access_key and aws_secret_key must be provided together, or both omitted to use default credential chain")
+		}
+
+		// Session token is optional and can only be used with explicit credentials
+		if c.AWSSessionToken != "" && (!hasAccessKey || !hasSecretKey) {
+			return fmt.Errorf("aws_session_token can only be used with explicit aws_access_key and aws_secret_key")
+		}
+
 	case ServiceTypeAzureServiceBus:
 		if c.ConnectionString == "" {
 			return fmt.Errorf("connection_string is required for Azure Service Bus")
