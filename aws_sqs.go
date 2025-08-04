@@ -27,7 +27,7 @@ type AWSSQSClient struct {
 
 // NewAWSSQSClient creates a new AWS SQS client
 func NewAWSSQSClient(ctx context.Context, config *ClientConfig) (Client, error) {
-	if config.ServiceType != "aws_sqs" {
+	if config.ServiceType != ServiceTypeAWSSQS {
 		return nil, fmt.Errorf("invalid service type for AWS SQS client: %s", config.ServiceType)
 	}
 
@@ -83,7 +83,7 @@ func createAWSSession(mqConfig *ClientConfig) (*session.Session, error) {
 // GetClientInfo returns information about the client
 func (c *AWSSQSClient) GetClientInfo() map[string]interface{} {
 	return map[string]interface{}{
-		"service_type": "aws_sqs",
+		"service_type": ServiceTypeAWSSQS,
 		"region":       c.region,
 		"timeout":      c.config.Timeout,
 		"max_retries":  c.config.MaxRetries,
@@ -93,7 +93,7 @@ func (c *AWSSQSClient) GetClientInfo() map[string]interface{} {
 // CreateQueue creates a new SQS queue
 func (c *AWSSQSClient) CreateQueue(ctx context.Context, name string, options QueueOptions) (*Queue, error) {
 	if err := validateQueueName(name); err != nil {
-		return nil, NewMQError(ErrorTypeValidation, "aws_sqs", "create_queue", "invalid queue name", err)
+		return nil, NewMQError(ErrorTypeValidation, ServiceTypeAWSSQS, "create_queue", "invalid queue name", err)
 	}
 
 	// Handle FIFO queue naming
@@ -135,7 +135,7 @@ func (c *AWSSQSClient) CreateQueue(ctx context.Context, name string, options Que
 	// Create the queue
 	result, err := c.sqs.CreateQueue(input)
 	if err != nil {
-		return nil, NewMQError(ErrorTypeService, "aws_sqs", "create_queue", "failed to create queue", err)
+		return nil, NewMQError(ErrorTypeService, ServiceTypeAWSSQS, "create_queue", "failed to create queue", err)
 	}
 
 	var queueURL string
@@ -144,7 +144,7 @@ func (c *AWSSQSClient) CreateQueue(ctx context.Context, name string, options Que
 	}
 
 	// Build unified queue object
-	queue := NewQueue(name, "aws_sqs")
+	queue := NewQueue(name, ServiceTypeAWSSQS)
 	queue.URL = queueURL
 	queue.LockDuration = coalesceInt(options.LockDuration, c.config.DefaultLockDuration)
 	queue.RetentionPeriod = coalesceInt(options.RetentionPeriod, 1209600) // 14 days
@@ -185,7 +185,7 @@ func (c *AWSSQSClient) ListQueues(ctx context.Context, prefix string) ([]*Queue,
 // GetQueue gets information about a specific queue
 func (c *AWSSQSClient) GetQueue(ctx context.Context, name string) (*Queue, error) {
 	if name == "" {
-		return nil, NewMQError(ErrorTypeNotFound, "aws_sqs", "get_queue", "queue not found", nil)
+		return nil, NewMQError(ErrorTypeNotFound, ServiceTypeAWSSQS, "get_queue", "queue not found", nil)
 	}
 
 	// Get queue URL first
@@ -195,11 +195,11 @@ func (c *AWSSQSClient) GetQueue(ctx context.Context, name string) (*Queue, error
 
 	urlResult, err := c.sqs.GetQueueUrl(getURLInput)
 	if err != nil {
-		return nil, NewMQError(ErrorTypeNotFound, "aws_sqs", "get_queue", "queue not found", err)
+		return nil, NewMQError(ErrorTypeNotFound, ServiceTypeAWSSQS, "get_queue", "queue not found", err)
 	}
 
 	if urlResult.QueueUrl == nil {
-		return nil, NewMQError(ErrorTypeNotFound, "aws_sqs", "get_queue", "queue URL not found", nil)
+		return nil, NewMQError(ErrorTypeNotFound, ServiceTypeAWSSQS, "get_queue", "queue URL not found", nil)
 	}
 
 	// Get queue attributes
@@ -210,11 +210,11 @@ func (c *AWSSQSClient) GetQueue(ctx context.Context, name string) (*Queue, error
 
 	attrsResult, err := c.sqs.GetQueueAttributes(getAttrsInput)
 	if err != nil {
-		return nil, NewMQError(ErrorTypeService, "aws_sqs", "get_queue", "failed to get queue attributes", err)
+		return nil, NewMQError(ErrorTypeService, ServiceTypeAWSSQS, "get_queue", "failed to get queue attributes", err)
 	}
 
 	// Build unified queue object
-	queue := NewQueue(name, "aws_sqs")
+	queue := NewQueue(name, ServiceTypeAWSSQS)
 	queue.URL = *urlResult.QueueUrl
 
 	// Parse attributes
@@ -287,7 +287,7 @@ func (c *AWSSQSClient) GetInfo(ctx context.Context, name string) (*Queue, error)
 // Send sends a message to a queue
 func (c *AWSSQSClient) Send(ctx context.Context, queueName, body string, options MessageOptions) (*MessageResult, error) {
 	if err := validateMessageBody(body); err != nil {
-		return nil, NewMQError(ErrorTypeValidation, "aws_sqs", "send", "invalid message body", err)
+		return nil, NewMQError(ErrorTypeValidation, ServiceTypeAWSSQS, "send", "invalid message body", err)
 	}
 
 	// TODO: Implement actual AWS SQS message sending
@@ -369,7 +369,7 @@ func (c *AWSSQSClient) BatchSend(ctx context.Context, queueName string, messages
 	}
 
 	// Split into SQS batch size limits (max 10)
-	batchSize := adaptBatchSize("aws_sqs", 10)
+	batchSize := adaptBatchSize(ServiceTypeAWSSQS, 10)
 	batches := splitBatchMessages(messages, batchSize)
 
 	var allResults []*MessageResult
@@ -408,7 +408,7 @@ func (c *AWSSQSClient) Schedule(ctx context.Context, queueName, body string, sch
 	maxDelay := 15 * time.Minute
 
 	if delay > maxDelay {
-		return nil, NewMQError(ErrorTypeValidation, "aws_sqs", "schedule",
+		return nil, NewMQError(ErrorTypeValidation, ServiceTypeAWSSQS, "schedule",
 			fmt.Sprintf("AWS SQS supports maximum delay of 15 minutes, requested: %v", delay), nil)
 	}
 
@@ -421,13 +421,13 @@ func (c *AWSSQSClient) Schedule(ctx context.Context, queueName, body string, sch
 
 // Cancel cancels a scheduled message (not supported by SQS)
 func (c *AWSSQSClient) Cancel(ctx context.Context, queueName, messageID string) error {
-	return NewMQError(ErrorTypeUnsupported, "aws_sqs", "cancel",
+	return NewMQError(ErrorTypeUnsupported, ServiceTypeAWSSQS, "cancel",
 		"message cancellation is not supported by AWS SQS", nil)
 }
 
 // Peek peeks at messages without receiving them (not supported by SQS)
 func (c *AWSSQSClient) Peek(ctx context.Context, queueName string, maxCount int) ([]*MessageResult, error) {
-	return nil, NewMQError(ErrorTypeUnsupported, "aws_sqs", "peek",
+	return nil, NewMQError(ErrorTypeUnsupported, ServiceTypeAWSSQS, "peek",
 		"message peeking is not supported by AWS SQS", nil)
 }
 

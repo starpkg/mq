@@ -32,7 +32,8 @@ type MessageResult struct {
 	TimeToLive    int `json:"time_to_live"` // TTL in seconds
 
 	// Service-specific information (internal use)
-	ReceiptHandle string `json:"receipt_handle"` // Service-specific handle for acknowledgment
+	ReceiptHandle   string      `json:"receipt_handle"` // Service-specific handle for acknowledgment
+	OriginalMessage interface{} `json:"-"`              // Original service-specific message object (not serialized)
 
 	// Operation result
 	Success bool   `json:"success"`

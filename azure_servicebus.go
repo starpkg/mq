@@ -3,11 +3,13 @@ package mq
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus"
+	"github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus/admin"
 )
 
 // AzureServiceBusClient implements the Client interface for Azure Service Bus
@@ -16,6 +18,7 @@ type AzureServiceBusClient struct {
 	connectionString string
 	namespace        string
 	client           *azservicebus.Client
+	adminClient      *admin.Client
 	senders          map[string]*azservicebus.Sender
 	receivers        map[string]*azservicebus.Receiver
 	sendMu           sync.RWMutex // Protects senders map and sending operations
@@ -24,7 +27,7 @@ type AzureServiceBusClient struct {
 
 // NewAzureServiceBusClient creates a new Azure Service Bus client
 func NewAzureServiceBusClient(ctx context.Context, config *ClientConfig) (Client, error) {
-	if config.ServiceType != "azure_servicebus" {
+	if config.ServiceType != ServiceTypeAzureServiceBus {
 		return nil, fmt.Errorf("invalid service type for Azure Service Bus client: %s", config.ServiceType)
 	}
 
@@ -38,11 +41,18 @@ func NewAzureServiceBusClient(ctx context.Context, config *ClientConfig) (Client
 		return nil, fmt.Errorf("failed to create Azure Service Bus client: %w", err)
 	}
 
+	// Create admin client for queue management operations
+	adminClient, err := admin.NewClientFromConnectionString(config.ConnectionString, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Azure Service Bus admin client: %w", err)
+	}
+
 	client := &AzureServiceBusClient{
 		config:           config.Copy(),
 		connectionString: config.ConnectionString,
 		namespace:        extractNamespaceFromConnectionString(config.ConnectionString),
 		client:           serviceBusClient,
+		adminClient:      adminClient,
 		senders:          make(map[string]*azservicebus.Sender),
 		receivers:        make(map[string]*azservicebus.Receiver),
 	}
@@ -53,49 +63,55 @@ func NewAzureServiceBusClient(ctx context.Context, config *ClientConfig) (Client
 // GetClientInfo returns information about the client
 func (c *AzureServiceBusClient) GetClientInfo() map[string]interface{} {
 	return map[string]interface{}{
-		"service_type": "azure_servicebus",
+		"service_type": ServiceTypeAzureServiceBus,
 		"namespace":    c.namespace,
 		"timeout":      c.config.Timeout,
 		"max_retries":  c.config.MaxRetries,
 	}
 }
 
-// CreateQueue creates a new Service Bus queue
+// CreateQueue creates a new Service Bus queue using admin client
 func (c *AzureServiceBusClient) CreateQueue(ctx context.Context, name string, options QueueOptions) (*Queue, error) {
 	if err := validateQueueName(name); err != nil {
-		return nil, NewMQError(ErrorTypeValidation, "azure_servicebus", "create_queue", "invalid queue name", err)
+		return nil, NewMQError(ErrorTypeValidation, ServiceTypeAzureServiceBus, "create_queue", "invalid queue name", err)
 	}
 
-	// Note: Queue creation requires admin permissions and separate admin client
-	// For now, we'll return a queue structure assuming the queue exists or can be created
-	// In practice, you would use the Azure Service Bus admin SDK to create queues
-
-	// Return the queue information
-	queue := NewQueue(name, "azure_servicebus")
-	queue.URL = fmt.Sprintf("https://%s.servicebus.windows.net/%s", c.namespace, name)
-	queue.LockDuration = coalesceInt(options.LockDuration, c.config.DefaultLockDuration)
-	queue.RetentionPeriod = coalesceInt(options.RetentionPeriod, 1209600) // 14 days
-	queue.MaxDeliveryCount = coalesceInt(options.MaxDeliveryCount, 10)
-	queue.EnableSessions = options.EnableSessions
-	queue.MaxQueueSize = options.MaxQueueSize
-
-	// Azure Service Bus has built-in dead letter queue support
-	if options.DeadLetterConfig != nil && options.DeadLetterConfig.Enabled {
-		queue.DeadLetterConfig = &DeadLetterConfig{
-			Enabled:          true,
-			QueueName:        name + "/$deadletterqueue", // Built-in DLQ path
-			MaxDeliveryCount: options.MaxDeliveryCount,
-		}
+	// Check if queue already exists
+	queueResponse, err := c.adminClient.GetQueue(ctx, name, nil)
+	if err == nil && queueResponse != nil {
+		// Queue exists, return the existing queue information
+		return c.buildQueueFromProperties(name, queueResponse.QueueProperties), nil
 	}
 
+	// Create queue options for admin client
+	queueOptions := &admin.CreateQueueOptions{
+		Properties: &admin.QueueProperties{
+			MaxDeliveryCount:           toInt32Ptr(int32(coalesceInt(options.MaxDeliveryCount, 10))),
+			LockDuration:               toStringPtr(formatDuration(options.LockDuration, c.config.DefaultLockDuration)),
+			DefaultMessageTimeToLive:   toStringPtr(formatDuration(options.RetentionPeriod, 1209600)), // 14 days default
+			RequiresSession:            &options.EnableSessions,
+			RequiresDuplicateDetection: &options.DuplicateDetection,
+			EnablePartitioning:         getBoolPtr(false),
+		},
+	}
+
+	// Set duplicate detection window if enabled
 	if options.DuplicateDetection {
-		queue.DuplicateDetection = &DuplicateDetection{
-			Enabled:       true,
-			WindowSeconds: coalesceInt(options.DuplicateWindowSecs, 300),
-		}
+		queueOptions.Properties.DuplicateDetectionHistoryTimeWindow = toStringPtr(formatDuration(options.DuplicateWindowSecs, 300))
 	}
 
-	return queue, nil
+	// Set max queue size if specified
+	if options.MaxQueueSize > 0 {
+		queueOptions.Properties.MaxSizeInMegabytes = toInt32Ptr(int32(options.MaxQueueSize / (1024 * 1024)))
+	}
+
+	// Create the queue
+	createdResponse, err := c.adminClient.CreateQueue(ctx, name, queueOptions)
+	if err != nil {
+		return nil, NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "create_queue", "failed to create queue", err)
+	}
+
+	return c.buildQueueFromProperties(name, createdResponse.QueueProperties), nil
 }
 
 // DeleteQueue deletes a Service Bus queue
@@ -115,42 +131,54 @@ func (c *AzureServiceBusClient) DeleteQueue(ctx context.Context, name string) er
 	}
 	c.receiveMu.Unlock()
 
-	// TODO: Implement actual queue deletion when Azure SDK is available
-	// For now, just clean up local resources
-	// _, err := c.adminClient.DeleteQueue(ctx, name, nil)
-	// if err != nil {
-	//     var respErr *azcore.ResponseError
-	//     if ok := errors.As(err, &respErr); ok && respErr.StatusCode == 404 {
-	//         return nil
-	//     }
-	//     return NewMQError(ErrorTypeService, "azure_servicebus", "delete_queue", "failed to delete queue", err)
-	// }
+	// Delete the queue using admin client
+	_, err := c.adminClient.DeleteQueue(ctx, name, nil)
+	if err != nil {
+		return NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "delete_queue", "failed to delete queue", err)
+	}
 
 	return nil
 }
 
-// ListQueues lists Service Bus queues
+// ListQueues lists Service Bus queues using admin client
 func (c *AzureServiceBusClient) ListQueues(ctx context.Context, prefix string) ([]*Queue, error) {
-	// TODO: Implement actual queue listing when Azure SDK is available
-	// For now, return empty list
-	return []*Queue{}, nil
+	var queues []*Queue
+
+	// Get queue properties from admin client
+	pager := c.adminClient.NewListQueuesPager(nil)
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			return nil, NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "list_queues", "failed to list queues", err)
+		}
+
+		for _, queueItem := range page.Queues {
+			// Filter by prefix if specified
+			if prefix != "" && !strings.HasPrefix(queueItem.QueueName, prefix) {
+				continue
+			}
+
+			queue := c.buildQueueFromProperties(queueItem.QueueName, queueItem.QueueProperties)
+			queues = append(queues, queue)
+		}
+	}
+
+	return queues, nil
 }
 
 // GetQueue gets information about a specific queue
 func (c *AzureServiceBusClient) GetQueue(ctx context.Context, name string) (*Queue, error) {
 	if name == "" {
-		return nil, NewMQError(ErrorTypeNotFound, "azure_servicebus", "get_queue", "queue not found", nil)
+		return nil, NewMQError(ErrorTypeNotFound, ServiceTypeAzureServiceBus, "get_queue", "queue not found", nil)
 	}
 
-	// TODO: Implement actual queue retrieval when Azure SDK is available
-	// For now, return a mock queue
-	queue := NewQueue(name, "azure_servicebus")
-	queue.URL = fmt.Sprintf("https://%s.servicebus.windows.net/%s", c.namespace, name)
-	queue.LockDuration = c.config.DefaultLockDuration
-	queue.RetentionPeriod = 1209600 // 14 days
-	queue.MaxDeliveryCount = 10
+	// Get queue properties from admin client
+	queueResponse, err := c.adminClient.GetQueue(ctx, name, nil)
+	if err != nil {
+		return nil, NewMQError(ErrorTypeNotFound, ServiceTypeAzureServiceBus, "get_queue", "queue not found", err)
+	}
 
-	return queue, nil
+	return c.buildQueueFromProperties(name, queueResponse.QueueProperties), nil
 }
 
 // Exists checks if a queue exists
@@ -159,17 +187,50 @@ func (c *AzureServiceBusClient) Exists(ctx context.Context, name string) (bool, 
 		return false, nil
 	}
 
-	// TODO: Implement actual existence check when Azure SDK is available
-	// For now, assume queue exists if name is not empty
-	return name != "", nil
+	// Check queue existence using admin client
+	_, err := c.adminClient.GetQueue(ctx, name, nil)
+	if err != nil {
+		return false, nil // Queue doesn't exist or access denied
+	}
+	return true, nil
 }
 
 // Purge purges all messages from a queue
 func (c *AzureServiceBusClient) Purge(ctx context.Context, name string) error {
-	// TODO: Implement actual Azure Service Bus queue purging
-	// Azure doesn't have a direct purge API, so this would involve:
-	// 1. Receiving all messages in batches
-	// 2. Completing them to remove from queue
+	// Azure Service Bus doesn't have a direct purge API, so we need to:
+	// 1. Receive all messages in batches
+	// 2. Complete them to remove from queue
+
+	// Get receiver for this queue
+	receiver, err := c.getReceiver(ctx, name)
+	if err != nil {
+		return NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "purge", "failed to get receiver", err)
+	}
+
+	// Receive and complete messages in batches until queue is empty
+	for {
+		messages, err := receiver.ReceiveMessages(ctx, 32, &azservicebus.ReceiveMessagesOptions{
+			TimeAfterFirstMessage: 1 * time.Second, // Short timeout to avoid hanging
+		})
+		if err != nil {
+			return NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "purge", "failed to receive messages", err)
+		}
+
+		// If no messages received, queue is empty
+		if len(messages) == 0 {
+			break
+		}
+
+		// Complete all received messages
+		for _, msg := range messages {
+			err = receiver.CompleteMessage(ctx, msg, nil)
+			if err != nil {
+				// Log the error but continue purging other messages
+				// In a production environment, you might want to handle this differently
+				continue
+			}
+		}
+	}
 
 	return nil
 }
@@ -183,14 +244,57 @@ func (c *AzureServiceBusClient) GetInfo(ctx context.Context, name string) (*Queu
 // Send sends a message to a queue
 func (c *AzureServiceBusClient) Send(ctx context.Context, queueName, body string, options MessageOptions) (*MessageResult, error) {
 	if err := validateMessageBody(body); err != nil {
-		return nil, NewMQError(ErrorTypeValidation, "azure_servicebus", "send", "invalid message body", err)
+		return nil, NewMQError(ErrorTypeValidation, ServiceTypeAzureServiceBus, "send", "invalid message body", err)
 	}
 
-	// TODO: Implement actual message sending when Azure SDK is available
-	// For now, return a mock result
+	// Get or create a sender for this queue
+	sender, err := c.getSender(ctx, queueName)
+	if err != nil {
+		return nil, NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "send", "failed to get sender", err)
+	}
+
+	// Generate message ID if not provided
 	messageID := options.MessageID
 	if messageID == "" {
 		messageID = generateMessageID()
+	}
+
+	// Build the Azure Service Bus message
+	message := &azservicebus.Message{
+		Body:      []byte(body),
+		MessageID: &messageID,
+	}
+
+	// Set optional properties
+	if options.Properties != nil {
+		message.ApplicationProperties = normalizeProperties(options.Properties)
+	}
+
+	if options.SessionID != "" {
+		message.SessionID = &options.SessionID
+	}
+
+	if options.CorrelationID != "" {
+		message.CorrelationID = &options.CorrelationID
+	}
+
+	if options.ReplyTo != "" {
+		message.ReplyTo = &options.ReplyTo
+	}
+
+	if options.TimeToLive > 0 {
+		ttl := time.Duration(options.TimeToLive) * time.Second
+		message.TimeToLive = &ttl
+	}
+
+	if options.ScheduledTime != nil {
+		message.ScheduledEnqueueTime = options.ScheduledTime
+	}
+
+	// Send the message
+	err = sender.SendMessage(ctx, message, nil)
+	if err != nil {
+		return nil, NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "send", "failed to send message", err)
 	}
 
 	// Build result
@@ -210,9 +314,44 @@ func (c *AzureServiceBusClient) Send(ctx context.Context, queueName, body string
 
 // Receive receives messages from a queue
 func (c *AzureServiceBusClient) Receive(ctx context.Context, queueName string, options ReceiveOptions) ([]*MessageResult, error) {
-	// TODO: Implement actual message receiving when Azure SDK is available
-	// For now, return empty list
-	return []*MessageResult{}, nil
+	// Get or create a receiver for this queue
+	receiver, err := c.getReceiver(ctx, queueName)
+	if err != nil {
+		return nil, NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "receive", "failed to get receiver", err)
+	}
+
+	// Determine the number of messages to receive
+	maxCount := options.MaxCount
+	if maxCount <= 0 {
+		maxCount = 1
+	}
+	if maxCount > 32 { // Azure Service Bus limit
+		maxCount = 32
+	}
+
+	// Set receive options
+	receiveOpts := &azservicebus.ReceiveMessagesOptions{}
+	if options.WaitTime > 0 {
+		receiveOpts.TimeAfterFirstMessage = time.Duration(options.WaitTime) * time.Second
+	}
+
+	// Receive messages
+	messages, err := receiver.ReceiveMessages(ctx, int(maxCount), receiveOpts)
+	if err != nil {
+		return nil, NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "receive", "failed to receive messages", err)
+	}
+
+	// Convert to unified message results
+	results := make([]*MessageResult, len(messages))
+	for i, msg := range messages {
+		result, err := c.convertFromAzureMessage(msg)
+		if err != nil {
+			return nil, NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "receive", "failed to convert message", err)
+		}
+		results[i] = result
+	}
+
+	return results, nil
 }
 
 // Delete deletes messages from a queue (completes them in Service Bus terms)
@@ -221,32 +360,118 @@ func (c *AzureServiceBusClient) Delete(ctx context.Context, queueName string, me
 		return []bool{}, nil
 	}
 
-	// TODO: Implement actual Azure Service Bus message completion
-	// This would involve:
-	// 1. Using message locks/settlement tokens
-	// 2. Calling CompleteMessage for each message
-	// 3. Handling batch operations (max 100 for Service Bus)
-
-	// For now, return all successful
 	results := make([]bool, len(messageIDs))
-	for i := range results {
-		results[i] = true
+
+	// Note: For Azure Service Bus, we need the original ReceivedMessage objects to complete them
+	// This implementation assumes messages are stored with their receipt handles when received
+	// In practice, this would require a message cache or different API design
+
+	// Note: For Azure Service Bus, we need the original ReceivedMessage objects to complete them
+	// Since this API only provides messageIDs, we'll indicate this is not fully supported
+	// In practice, message completion should be done immediately after processing using the
+	// CompleteMessage method with the original ReceivedMessage
+	for i := range messageIDs {
+		results[i] = false // Cannot complete without original ReceivedMessage
 	}
+
 	return results, nil
 }
 
-// Lock renews the lock on a message
-func (c *AzureServiceBusClient) Lock(ctx context.Context, queueName, messageID string, duration int) error {
-	// TODO: Implement actual Azure Service Bus lock renewal
-	// This would involve calling RenewMessageLock API
+// CompleteMessage completes a message using the original Azure ReceivedMessage
+func (c *AzureServiceBusClient) CompleteMessage(ctx context.Context, queueName string, msgResult *MessageResult) error {
+	// Get receiver for this queue
+	receiver, err := c.getReceiver(ctx, queueName)
+	if err != nil {
+		return NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "complete_message", "failed to get receiver", err)
+	}
+
+	// Extract the original Azure message
+	originalMsg, ok := msgResult.OriginalMessage.(*azservicebus.ReceivedMessage)
+	if !ok {
+		return NewMQError(ErrorTypeValidation, ServiceTypeAzureServiceBus, "complete_message", "invalid original message type", nil)
+	}
+
+	// Complete the message
+	err = receiver.CompleteMessage(ctx, originalMsg, nil)
+	if err != nil {
+		return NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "complete_message", "failed to complete message", err)
+	}
 
 	return nil
 }
 
+// AbandonMessage abandons a message using the original Azure ReceivedMessage
+func (c *AzureServiceBusClient) AbandonMessage(ctx context.Context, queueName string, msgResult *MessageResult) error {
+	// Get receiver for this queue
+	receiver, err := c.getReceiver(ctx, queueName)
+	if err != nil {
+		return NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "abandon_message", "failed to get receiver", err)
+	}
+
+	// Extract the original Azure message
+	originalMsg, ok := msgResult.OriginalMessage.(*azservicebus.ReceivedMessage)
+	if !ok {
+		return NewMQError(ErrorTypeValidation, ServiceTypeAzureServiceBus, "abandon_message", "invalid original message type", nil)
+	}
+
+	// Abandon the message
+	err = receiver.AbandonMessage(ctx, originalMsg, nil)
+	if err != nil {
+		return NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "abandon_message", "failed to abandon message", err)
+	}
+
+	return nil
+}
+
+// Lock renews the lock on a message
+func (c *AzureServiceBusClient) Lock(ctx context.Context, queueName, messageID string, duration int) error {
+	// Get receiver for this queue
+	receiver, err := c.getReceiver(ctx, queueName)
+	if err != nil {
+		return NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "lock", "failed to get receiver", err)
+	}
+
+	// Note: Azure Service Bus lock renewal requires the original ReceivedMessage object
+	// This method cannot be implemented with just messageID
+	// Lock renewal should be done using RenewMessageLock with the original ReceivedMessage
+	_ = receiver
+	return NewMQError(ErrorTypeUnsupported, ServiceTypeAzureServiceBus, "lock", "lock renewal requires original message object", nil)
+}
+
 // Unlock abandons a message (releases the lock)
 func (c *AzureServiceBusClient) Unlock(ctx context.Context, queueName, messageID string) error {
-	// TODO: Implement actual Azure Service Bus message abandonment
-	// This would involve calling AbandonMessage API
+	// Get receiver for this queue
+	receiver, err := c.getReceiver(ctx, queueName)
+	if err != nil {
+		return NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "unlock", "failed to get receiver", err)
+	}
+
+	// Note: Azure Service Bus message abandonment requires the original ReceivedMessage object
+	// This method cannot be implemented with just messageID
+	// Message abandonment should be done using AbandonMessage with the original ReceivedMessage
+	_ = receiver
+	return NewMQError(ErrorTypeUnsupported, ServiceTypeAzureServiceBus, "unlock", "message abandonment requires original message object", nil)
+}
+
+// RenewMessageLock renews the lock on a message using the original Azure ReceivedMessage
+func (c *AzureServiceBusClient) RenewMessageLock(ctx context.Context, queueName string, msgResult *MessageResult) error {
+	// Get receiver for this queue
+	receiver, err := c.getReceiver(ctx, queueName)
+	if err != nil {
+		return NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "renew_lock", "failed to get receiver", err)
+	}
+
+	// Extract the original Azure message
+	originalMsg, ok := msgResult.OriginalMessage.(*azservicebus.ReceivedMessage)
+	if !ok {
+		return NewMQError(ErrorTypeValidation, ServiceTypeAzureServiceBus, "renew_lock", "invalid original message type", nil)
+	}
+
+	// Renew the message lock
+	err = receiver.RenewMessageLock(ctx, originalMsg, nil)
+	if err != nil {
+		return NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "renew_lock", "failed to renew message lock", err)
+	}
 
 	return nil
 }
@@ -257,39 +482,96 @@ func (c *AzureServiceBusClient) BatchSend(ctx context.Context, queueName string,
 		return []*MessageResult{}, nil
 	}
 
-	// Split into Service Bus batch size limits (max 100)
-	batchSize := adaptBatchSize("azure_servicebus", 100)
-	batches := splitBatchMessages(messages, batchSize)
+	// Get or create a sender for this queue
+	sender, err := c.getSender(ctx, queueName)
+	if err != nil {
+		return nil, NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "batch_send", "failed to get sender", err)
+	}
+
+	// Azure Service Bus supports batch sending with message batches
+	// We'll create a message batch and add messages to it
+	batch, err := sender.NewMessageBatch(ctx, nil)
+	if err != nil {
+		return nil, NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "batch_send", "failed to create message batch", err)
+	}
 
 	var allResults []*MessageResult
+	var currentBatchResults []*MessageResult
 
-	for _, batch := range batches {
-		batchResults, err := c.sendBatch(ctx, queueName, batch)
-		if err != nil {
-			return allResults, err
+	for _, batchMsg := range messages {
+		// Generate message ID if not provided
+		messageID := batchMsg.MessageID
+		if messageID == "" {
+			messageID = generateMessageID()
 		}
-		allResults = append(allResults, batchResults...)
+
+		// Build the Azure Service Bus message
+		message := &azservicebus.Message{
+			Body:      []byte(batchMsg.Body),
+			MessageID: &messageID,
+		}
+
+		// Set optional properties
+		if batchMsg.Properties != nil {
+			message.ApplicationProperties = normalizeProperties(batchMsg.Properties)
+		}
+
+		if batchMsg.SessionID != "" {
+			message.SessionID = &batchMsg.SessionID
+		}
+
+		if batchMsg.CorrelationID != "" {
+			message.CorrelationID = &batchMsg.CorrelationID
+		}
+
+		if batchMsg.ReplyTo != "" {
+			message.ReplyTo = &batchMsg.ReplyTo
+		}
+
+		// Try to add the message to the current batch
+		err = batch.AddMessage(message, nil)
+		if err != nil {
+			// If the batch is full, send it and create a new one
+			if len(currentBatchResults) > 0 {
+				sendErr := sender.SendMessageBatch(ctx, batch, nil)
+				if sendErr != nil {
+					return allResults, NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "batch_send", "failed to send batch", sendErr)
+				}
+				allResults = append(allResults, currentBatchResults...)
+				currentBatchResults = nil
+			}
+
+			// Create a new batch and try adding the message again
+			batch, err = sender.NewMessageBatch(ctx, nil)
+			if err != nil {
+				return allResults, NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "batch_send", "failed to create new message batch", err)
+			}
+
+			err = batch.AddMessage(message, nil)
+			if err != nil {
+				return allResults, NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "batch_send", "message too large for batch", err)
+			}
+		}
+
+		// Create result for this message
+		result := NewMessageResult(messageID, batchMsg.Body)
+		result.Properties = normalizeProperties(batchMsg.Properties)
+		result.SessionID = batchMsg.SessionID
+		result.CorrelationID = batchMsg.CorrelationID
+		result.ReplyTo = batchMsg.ReplyTo
+		currentBatchResults = append(currentBatchResults, result)
+	}
+
+	// Send the final batch if it has messages
+	if len(currentBatchResults) > 0 {
+		err = sender.SendMessageBatch(ctx, batch, nil)
+		if err != nil {
+			return allResults, NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "batch_send", "failed to send final batch", err)
+		}
+		allResults = append(allResults, currentBatchResults...)
 	}
 
 	return allResults, nil
-}
-
-// sendBatch sends a single batch of messages
-func (c *AzureServiceBusClient) sendBatch(ctx context.Context, queueName string, messages []BatchMessage) ([]*MessageResult, error) {
-	// TODO: Implement actual Azure Service Bus batch sending
-	// This would involve calling SendMessageBatch API
-
-	// For now, return mock results
-	results := make([]*MessageResult, len(messages))
-	for i, msg := range messages {
-		results[i] = NewMessageResult(generateMessageID(), msg.Body)
-		results[i].Properties = normalizeProperties(msg.Properties)
-		results[i].SessionID = msg.SessionID
-		results[i].CorrelationID = msg.CorrelationID
-		results[i].ReplyTo = msg.ReplyTo
-	}
-
-	return results, nil
 }
 
 // Schedule schedules a message for future delivery
@@ -376,6 +658,8 @@ func (c *AzureServiceBusClient) Close() error {
 	if err := c.client.Close(context.Background()); err != nil && firstErr == nil {
 		firstErr = fmt.Errorf("failed to close Azure Service Bus client: %w", err)
 	}
+
+	// Note: Admin client doesn't have a Close method
 
 	return firstErr
 }
@@ -618,7 +902,62 @@ func convertToServiceBusMessage(body string, options MessageOptions) map[string]
 	return msg
 }
 
-// convertFromServiceBusMessage converts Service Bus message to unified MessageResult
+// convertFromAzureMessage converts Azure Service Bus message to unified MessageResult
+func (c *AzureServiceBusClient) convertFromAzureMessage(msg *azservicebus.ReceivedMessage) (*MessageResult, error) {
+	result := &MessageResult{
+		Success:   true,
+		Body:      string(msg.Body),
+		MessageID: msg.MessageID,
+	}
+
+	// Copy properties
+	if msg.ApplicationProperties != nil {
+		result.Properties = msg.ApplicationProperties
+	}
+
+	// Copy optional fields
+	if msg.SessionID != nil {
+		result.SessionID = *msg.SessionID
+	}
+
+	if msg.CorrelationID != nil {
+		result.CorrelationID = *msg.CorrelationID
+	}
+
+	if msg.ReplyTo != nil {
+		result.ReplyTo = *msg.ReplyTo
+	}
+
+	// Set delivery count
+	result.DeliveryCount = int(msg.DeliveryCount)
+
+	// Set enqueue time
+	if msg.EnqueuedTime != nil {
+		result.EnqueueTime = *msg.EnqueuedTime
+	}
+
+	// Set scheduled time
+	if msg.ScheduledEnqueueTime != nil && !msg.ScheduledEnqueueTime.IsZero() {
+		result.ScheduledTime = msg.ScheduledEnqueueTime
+	}
+
+	// Set lock token as receipt handle
+	if len(msg.LockToken) > 0 {
+		result.ReceiptHandle = string(msg.LockToken[:])
+	}
+
+	// Set lock expiry time
+	if msg.LockedUntil != nil && !msg.LockedUntil.IsZero() {
+		result.LockExpiresAt = msg.LockedUntil
+	}
+
+	// Store the original message for completion/abandonment
+	result.OriginalMessage = msg
+
+	return result, nil
+}
+
+// convertFromServiceBusMessage converts Service Bus message to unified MessageResult (legacy)
 func convertFromServiceBusMessage(sbMessage map[string]interface{}) *MessageResult {
 	result := &MessageResult{
 		Success: true,
@@ -669,4 +1008,100 @@ func convertFromServiceBusMessage(sbMessage map[string]interface{}) *MessageResu
 	}
 
 	return result
+}
+
+// buildQueueFromProperties creates a unified Queue object from Azure Service Bus queue properties
+func (c *AzureServiceBusClient) buildQueueFromProperties(name string, props admin.QueueProperties) *Queue {
+	queue := NewQueue(name, ServiceTypeAzureServiceBus)
+
+	// Get the Service Bus endpoint from the client (no hard-coded URLs)
+	queue.URL = fmt.Sprintf("https://%s/%s", c.namespace, name)
+
+	// Map Azure properties to unified queue structure
+	if props.LockDuration != nil {
+		queue.LockDuration = parseDuration(*props.LockDuration, c.config.DefaultLockDuration)
+	} else {
+		queue.LockDuration = c.config.DefaultLockDuration
+	}
+
+	if props.DefaultMessageTimeToLive != nil {
+		queue.RetentionPeriod = parseDuration(*props.DefaultMessageTimeToLive, 1209600)
+	} else {
+		queue.RetentionPeriod = 1209600 // 14 days
+	}
+
+	if props.MaxDeliveryCount != nil {
+		queue.MaxDeliveryCount = int(*props.MaxDeliveryCount)
+	} else {
+		queue.MaxDeliveryCount = 10
+	}
+
+	if props.RequiresSession != nil {
+		queue.EnableSessions = *props.RequiresSession
+	}
+
+	if props.MaxSizeInMegabytes != nil {
+		queue.MaxQueueSize = int64(*props.MaxSizeInMegabytes) * 1024 * 1024 // Convert MB to bytes
+	}
+
+	// Azure Service Bus has built-in dead letter queue support
+	queue.DeadLetterConfig = &DeadLetterConfig{
+		Enabled:          true,
+		QueueName:        name + "/$deadletterqueue", // Built-in DLQ path
+		MaxDeliveryCount: queue.MaxDeliveryCount,
+	}
+
+	if props.RequiresDuplicateDetection != nil && *props.RequiresDuplicateDetection {
+		windowSecs := 300 // 5 minutes default
+		if props.DuplicateDetectionHistoryTimeWindow != nil {
+			windowSecs = parseDuration(*props.DuplicateDetectionHistoryTimeWindow, 300)
+		}
+		queue.DuplicateDetection = &DuplicateDetection{
+			Enabled:       true,
+			WindowSeconds: windowSecs,
+		}
+	}
+
+	queue.CreatedTime = time.Now()
+	queue.ModifiedTime = time.Now()
+
+	return queue
+}
+
+// Helper functions for Azure admin API type conversions
+func getBoolPtr(value bool) *bool {
+	return &value
+}
+
+func toInt32Ptr(value int32) *int32 {
+	return &value
+}
+
+func toStringPtr(value string) *string {
+	return &value
+}
+
+// formatDuration converts seconds to ISO 8601 duration format for Azure Service Bus
+func formatDuration(seconds int, fallbackSeconds int) string {
+	if seconds > 0 {
+		return fmt.Sprintf("PT%dS", seconds)
+	}
+	return fmt.Sprintf("PT%dS", fallbackSeconds)
+}
+
+// parseDuration converts ISO 8601 duration string to seconds
+func parseDuration(durationStr string, fallbackSeconds int) int {
+	if durationStr == "" {
+		return fallbackSeconds
+	}
+
+	// Parse simple PT<number>S format
+	if strings.HasPrefix(durationStr, "PT") && strings.HasSuffix(durationStr, "S") {
+		numStr := strings.TrimSuffix(strings.TrimPrefix(durationStr, "PT"), "S")
+		if seconds, err := strconv.Atoi(numStr); err == nil {
+			return seconds
+		}
+	}
+
+	return fallbackSeconds
 }

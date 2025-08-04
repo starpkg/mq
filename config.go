@@ -19,6 +19,13 @@ const (
 	configKeyDefaultBatchSize    = "default_batch_size"
 )
 
+// Service type constants
+const (
+	ServiceTypeAWSSQS          = "aws_sqs"
+	ServiceTypeAzureServiceBus = "azure_servicebus"
+	ServiceTypeAuto            = "auto"
+)
+
 // ClientConfig contains configuration for a message queue client
 type ClientConfig struct {
 	// Service configuration
