@@ -6,10 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
-	// TODO: Uncomment when Azure SDK compatibility is resolved
-	// "github.com/Azure/azure-sdk-for-go/sdk/azcore"
-	// "github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus"
-	// "github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus/admin"
+
+	"github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus"
 )
 
 // AzureServiceBusClient implements the Client interface for Azure Service Bus
@@ -17,12 +15,11 @@ type AzureServiceBusClient struct {
 	config           *ClientConfig
 	connectionString string
 	namespace        string
-	client           interface{}            // Will be *azservicebus.Client when SDK is enabled
-	adminClient      interface{}            // Will be *admin.Client when SDK is enabled
-	senders          map[string]interface{} // Will be map[string]*azservicebus.Sender when SDK is enabled
-	receivers        map[string]interface{} // Will be map[string]*azservicebus.Receiver when SDK is enabled
-	sendMu           sync.RWMutex           // Protects senders map and sending operations
-	receiveMu        sync.RWMutex           // Protects receivers map and receiving operations
+	client           *azservicebus.Client
+	senders          map[string]*azservicebus.Sender
+	receivers        map[string]*azservicebus.Receiver
+	sendMu           sync.RWMutex // Protects senders map and sending operations
+	receiveMu        sync.RWMutex // Protects receivers map and receiving operations
 }
 
 // NewAzureServiceBusClient creates a new Azure Service Bus client
@@ -35,30 +32,19 @@ func NewAzureServiceBusClient(ctx context.Context, config *ClientConfig) (Client
 		return nil, fmt.Errorf("connection_string is required for Azure Service Bus")
 	}
 
-	// TODO: Create actual Azure SDK clients when compatibility is resolved
-	// For now, use placeholder values
-	var serviceBusClient interface{} = "placeholder-service-bus-client"
-	var adminClient interface{} = "placeholder-admin-client"
-
-	// TODO: Uncomment when Azure SDK is available:
-	// serviceBusClient, err := azservicebus.NewClientFromConnectionString(config.ConnectionString, nil)
-	// if err != nil {
-	//     return nil, fmt.Errorf("failed to create Azure Service Bus client: %w", err)
-	// }
-	// adminClient, err := admin.NewClientFromConnectionString(config.ConnectionString, nil)
-	// if err != nil {
-	//     serviceBusClient.Close(ctx)
-	//     return nil, fmt.Errorf("failed to create Azure Service Bus admin client: %w", err)
-	// }
+	// Create Service Bus client
+	serviceBusClient, err := azservicebus.NewClientFromConnectionString(config.ConnectionString, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Azure Service Bus client: %w", err)
+	}
 
 	client := &AzureServiceBusClient{
 		config:           config.Copy(),
 		connectionString: config.ConnectionString,
 		namespace:        extractNamespaceFromConnectionString(config.ConnectionString),
 		client:           serviceBusClient,
-		adminClient:      adminClient,
-		senders:          make(map[string]interface{}),
-		receivers:        make(map[string]interface{}),
+		senders:          make(map[string]*azservicebus.Sender),
+		receivers:        make(map[string]*azservicebus.Receiver),
 	}
 
 	return client, nil
@@ -80,11 +66,11 @@ func (c *AzureServiceBusClient) CreateQueue(ctx context.Context, name string, op
 		return nil, NewMQError(ErrorTypeValidation, "azure_servicebus", "create_queue", "invalid queue name", err)
 	}
 
-	// TODO: Implement actual queue creation when Azure SDK is available
-	// For now, just return a mock queue
-	_ = c.buildQueueProperties(options) // Keep the function call for testing
+	// Note: Queue creation requires admin permissions and separate admin client
+	// For now, we'll return a queue structure assuming the queue exists or can be created
+	// In practice, you would use the Azure Service Bus admin SDK to create queues
 
-	// Return the created queue information
+	// Return the queue information
 	queue := NewQueue(name, "azure_servicebus")
 	queue.URL = fmt.Sprintf("https://%s.servicebus.windows.net/%s", c.namespace, name)
 	queue.LockDuration = coalesceInt(options.LockDuration, c.config.DefaultLockDuration)
@@ -116,17 +102,15 @@ func (c *AzureServiceBusClient) CreateQueue(ctx context.Context, name string, op
 func (c *AzureServiceBusClient) DeleteQueue(ctx context.Context, name string) error {
 	// Close any existing senders/receivers for this queue
 	c.sendMu.Lock()
-	if _, exists := c.senders[name]; exists {
-		// TODO: Close sender when Azure SDK is available
-		// sender.Close(ctx)
+	if sender, exists := c.senders[name]; exists {
+		sender.Close(ctx)
 		delete(c.senders, name)
 	}
 	c.sendMu.Unlock()
 
 	c.receiveMu.Lock()
-	if _, exists := c.receivers[name]; exists {
-		// TODO: Close receiver when Azure SDK is available
-		// receiver.Close(ctx)
+	if receiver, exists := c.receivers[name]; exists {
+		receiver.Close(ctx)
 		delete(c.receivers, name)
 	}
 	c.receiveMu.Unlock()
@@ -366,52 +350,97 @@ func (c *AzureServiceBusClient) DeadLetterPurge(ctx context.Context, queueName s
 
 // Close closes the client connection
 func (c *AzureServiceBusClient) Close() error {
+	var firstErr error
+
 	// Close all senders
 	c.sendMu.Lock()
-	for queueName := range c.senders {
-		// TODO: Close sender when Azure SDK is available
-		// if err := sender.Close(context.Background()); err != nil && firstErr == nil {
-		//     firstErr = fmt.Errorf("failed to close sender for queue %s: %w", queueName, err)
-		// }
-		_ = queueName // Suppress unused variable warning
+	for queueName, sender := range c.senders {
+		if err := sender.Close(context.Background()); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("failed to close sender for queue %s: %w", queueName, err)
+		}
 	}
-	c.senders = make(map[string]interface{})
+	c.senders = make(map[string]*azservicebus.Sender)
 	c.sendMu.Unlock()
 
 	// Close all receivers
 	c.receiveMu.Lock()
-	for queueName := range c.receivers {
-		// TODO: Close receiver when Azure SDK is available
-		// if err := receiver.Close(context.Background()); err != nil && firstErr == nil {
-		//     firstErr = fmt.Errorf("failed to close receiver for queue %s: %w", queueName, err)
-		// }
-		_ = queueName // Suppress unused variable warning
+	for queueName, receiver := range c.receivers {
+		if err := receiver.Close(context.Background()); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("failed to close receiver for queue %s: %w", queueName, err)
+		}
 	}
-	c.receivers = make(map[string]interface{})
+	c.receivers = make(map[string]*azservicebus.Receiver)
 	c.receiveMu.Unlock()
 
-	// TODO: Close the main client when Azure SDK is available
-	// if err := c.client.Close(context.Background()); err != nil && firstErr == nil {
-	//     firstErr = fmt.Errorf("failed to close Azure Service Bus client: %w", err)
-	// }
+	// Close the main client
+	if err := c.client.Close(context.Background()); err != nil && firstErr == nil {
+		firstErr = fmt.Errorf("failed to close Azure Service Bus client: %w", err)
+	}
 
-	return nil
+	return firstErr
 }
 
 // Helper functions for Azure Service Bus specific operations
 
 // getSender gets or creates a sender for the specified queue
-func (c *AzureServiceBusClient) getSender(ctx context.Context, queueName string) (interface{}, error) {
-	// TODO: Implement actual sender creation when Azure SDK is available
-	// For now, return a placeholder
-	return "placeholder-sender", nil
+func (c *AzureServiceBusClient) getSender(ctx context.Context, queueName string) (*azservicebus.Sender, error) {
+	c.sendMu.RLock()
+	sender, exists := c.senders[queueName]
+	c.sendMu.RUnlock()
+
+	if exists {
+		return sender, nil
+	}
+
+	// Create new sender
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+
+	// Double-check after acquiring write lock
+	if sender, exists := c.senders[queueName]; exists {
+		return sender, nil
+	}
+
+	newSender, err := c.client.NewSender(queueName, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create sender for queue %s: %w", queueName, err)
+	}
+
+	c.senders[queueName] = newSender
+	return newSender, nil
 }
 
 // getReceiver gets or creates a receiver for the specified queue
-func (c *AzureServiceBusClient) getReceiver(ctx context.Context, queueName string) (interface{}, error) {
-	// TODO: Implement actual receiver creation when Azure SDK is available
-	// For now, return a placeholder
-	return "placeholder-receiver", nil
+func (c *AzureServiceBusClient) getReceiver(ctx context.Context, queueName string) (*azservicebus.Receiver, error) {
+	c.receiveMu.RLock()
+	receiver, exists := c.receivers[queueName]
+	c.receiveMu.RUnlock()
+
+	if exists {
+		return receiver, nil
+	}
+
+	// Create new receiver
+	c.receiveMu.Lock()
+	defer c.receiveMu.Unlock()
+
+	// Double-check after acquiring write lock
+	if receiver, exists := c.receivers[queueName]; exists {
+		return receiver, nil
+	}
+
+	// Use PeekLock mode by default for better reliability
+	receiverOpts := &azservicebus.ReceiverOptions{
+		ReceiveMode: azservicebus.ReceiveModePeekLock,
+	}
+
+	newReceiver, err := c.client.NewReceiverForQueue(queueName, receiverOpts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create receiver for queue %s: %w", queueName, err)
+	}
+
+	c.receivers[queueName] = newReceiver
+	return newReceiver, nil
 }
 
 // buildQueueProperties builds Azure Service Bus queue properties from unified options

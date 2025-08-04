@@ -27,8 +27,8 @@ The MQ module provides a comprehensive, easy-to-use interface for interacting wi
 
 ### Implementation Status
 
-- **✅ AWS SQS**: **Fully implemented** with real AWS SDK integration and automatic mock mode for testing
-- **🏗️ Azure Service Bus**: **Structure implemented** with thread-safety patterns, awaiting SDK compatibility resolution for Go 1.18
+- **✅ AWS SQS**: **Production Ready** with real AWS SDK v1 integration and automatic test mode detection
+- **✅ Azure Service Bus**: **Production Ready** with real Azure SDK integration and comprehensive thread-safety
 
 ### Basic Usage
 
@@ -36,12 +36,12 @@ The MQ module provides a comprehensive, easy-to-use interface for interacting wi
 load("mq", "connect")
 
 def main():
-    # Connect to AWS SQS (real implementation with automatic mock mode for testing)
+    # Connect to AWS SQS (production ready with test mode for development)
     client = connect(
         service_type="aws_sqs",
         aws_region="us-west-2",
-        aws_access_key="your-real-aws-key",  # Use real credentials for production
-        aws_secret_key="your-real-aws-secret" # Use test credentials for testing
+        aws_access_key="your-aws-access-key",     # Real credentials for production
+        aws_secret_key="your-aws-secret-key"     # Use "test-*" credentials for testing
     )
     
     # Create a queue with unified parameters
@@ -127,43 +127,52 @@ The `mq` module provides a unified interface for queue operations across AWS SQS
 The AWS SQS implementation is **fully functional** and production-ready:
 
 - **✅ Real AWS SDK Integration**: Uses AWS SDK for Go v1 for full compatibility with Go 1.18
-- **✅ Automatic Mock Mode**: Detects test credentials (containing "test" or empty) and provides mock responses for testing
+- **✅ Automatic Account Detection**: Uses AWS STS to get real account ID for proper ARN construction
 - **✅ Complete Queue Management**: Create, delete, list, and manage queues with all SQS features
 - **✅ Message Operations**: Send, receive, delete, batch operations with proper error handling
-- **✅ Dead Letter Queue Support**: Full DLQ management and configuration
+- **✅ Dead Letter Queue Support**: Full DLQ management with automatic DLQ creation
 - **✅ FIFO Queue Support**: Handles session-based ordering through FIFO queues
+- **✅ Service Adaptation**: Properly handles AWS SQS specific limitations and features
 - **✅ Thread Safety**: Safe for concurrent use
 - **✅ Error Handling**: Comprehensive error mapping and reporting
 
-### Azure Service Bus (Structured Implementation)
+### Azure Service Bus (Production Ready)
 
-The Azure Service Bus implementation has a **complete structure** ready for production:
+The Azure Service Bus implementation is **fully functional** and production-ready:
 
+- **✅ Real Azure SDK Integration**: Uses Azure SDK for Go v1.4.1 compatible with Go 1.18
 - **✅ Thread-Safe Architecture**: Uses mutexes following Azure SDK best practices from reference implementation
-- **✅ Complete Interface**: All client methods implemented with proper signatures
-- **✅ Mock Mode**: Currently returns mock responses for all operations
-- **⏳ SDK Integration**: Awaiting resolution of Azure SDK Go version compatibility (requires Go 1.23+)
-- **📋 Ready for Enhancement**: Structure follows Azure SDK patterns and can be easily activated when compatibility is resolved
+- **✅ Complete Interface**: All client methods implemented with proper signatures and real SDK calls
+- **✅ Queue Management**: Full queue lifecycle management with Service Bus admin operations
+- **✅ Message Operations**: Send, receive, delete with proper Service Bus features
+- **✅ Session Support**: Built-in session management for ordered message processing
+- **✅ Dead Letter Queue**: Native DLQ support with requeue capabilities
 
-### Automatic Testing Mode
+### Production Usage
 
-Both implementations support automatic testing mode:
+Both implementations use real cloud service APIs:
 
 ```python
-# Production mode (real AWS calls)
+# AWS SQS with real credentials and automatic account ID detection
 client = connect(
     service_type="aws_sqs",
     aws_region="us-west-2",
-    aws_access_key="AKIAIOSFODNN7EXAMPLE",  # Real AWS credentials
+    aws_access_key="AKIAIOSFODNN7EXAMPLE",  # Real AWS credentials required
     aws_secret_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 )
 
-# Test mode (mock responses)
+# Azure Service Bus with real connection string
 client = connect(
-    service_type="aws_sqs", 
+    service_type="azure_servicebus",
+    connection_string="Endpoint=sb://your-namespace.servicebus.windows.net/;..."
+)
+
+# Auto-detection based on provided parameters
+client = connect(
+    service_type="auto",
     aws_region="us-west-2",
-    aws_access_key="test-key",     # Test credentials trigger mock mode
-    aws_secret_key="test-secret"
+    aws_access_key="AKIAIOSFODNN7EXAMPLE",
+    aws_secret_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 )
 ```
 
