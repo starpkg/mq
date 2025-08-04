@@ -17,6 +17,27 @@ import (
 // ModuleName defines the expected name for this module when used in Starlark's load() function
 const ModuleName = "mq"
 
+// Configuration key constants
+const (
+	configKeyServiceType         = "service_type"
+	configKeyConnectionString    = "connection_string"
+	configKeyTimeout             = "timeout"
+	configKeyMaxRetries          = "max_retries"
+	configKeyAWSRegion           = "aws_region"
+	configKeyAWSAccessKey        = "aws_access_key"
+	configKeyAWSSecretKey        = "aws_secret_key"
+	configKeyAWSSessionToken     = "aws_session_token"
+	configKeyDefaultLockDuration = "default_lock_duration"
+	configKeyDefaultBatchSize    = "default_batch_size"
+)
+
+// Service type constants
+const (
+	ServiceTypeAWSSQS          = "aws_sqs"
+	ServiceTypeAzureServiceBus = "azure_servicebus"
+	ServiceTypeAuto            = "auto"
+)
+
 var (
 	none = starlark.None
 )
@@ -30,7 +51,7 @@ type Module struct {
 // NewModule creates a new instance of Module with default configurations
 func NewModule() *Module {
 	return newModuleWithOptions(
-		genConfigOption(configKeyServiceType, "Service type (aws_sqs, azure_servicebus, auto)", "auto"),
+		genConfigOption(configKeyServiceType, "Service type (aws_sqs, azure_servicebus, auto)", ServiceTypeAuto),
 		genSecretConfigOption(configKeyConnectionString, "Azure Service Bus connection string", ""),
 		genConfigOption(configKeyTimeout, "Connection timeout in seconds", 30),
 		genConfigOption(configKeyMaxRetries, "Maximum retry attempts", 3),
@@ -42,8 +63,6 @@ func NewModule() *Module {
 		genConfigOption(configKeyDefaultBatchSize, "Default batch size for operations", 10),
 	)
 }
-
-// Helper functions
 
 // genConfigOption creates a configuration option with common settings
 func genConfigOption[T any](name, description string, defaultValue T) *base.ConfigOption[T] {
@@ -149,12 +168,12 @@ func (m *Module) starConnect(thread *starlark.Thread, b *starlark.Builtin, args 
 	}
 
 	// Auto-detect service type if needed
-	if config.ServiceType == "auto" {
+	if config.ServiceType == ServiceTypeAuto {
 		config.ServiceType = detectServiceType(config)
 	}
 
 	// Validate configuration
-	if err := validateConfig(config); err != nil {
+	if err := config.Validate(); err != nil {
 		return none, fmt.Errorf("invalid configuration: %w", err)
 	}
 
@@ -226,36 +245,6 @@ func detectServiceType(config *ClientConfig) string {
 
 	// Default to AWS SQS
 	return ServiceTypeAWSSQS
-}
-
-// validateConfig validates the client configuration
-func validateConfig(config *ClientConfig) error {
-	if config.ServiceType == "" {
-		return fmt.Errorf("service_type is required")
-	}
-
-	switch config.ServiceType {
-	case ServiceTypeAWSSQS:
-		if config.AWSRegion == "" {
-			return fmt.Errorf("aws_region is required for AWS SQS")
-		}
-	case ServiceTypeAzureServiceBus:
-		if config.ConnectionString == "" {
-			return fmt.Errorf("connection_string is required for Azure Service Bus")
-		}
-	default:
-		return fmt.Errorf("unsupported service type: %s", config.ServiceType)
-	}
-
-	if config.Timeout < 0 {
-		return fmt.Errorf("timeout must be non-negative")
-	}
-
-	if config.MaxRetries < 0 {
-		return fmt.Errorf("max_retries must be non-negative")
-	}
-
-	return nil
 }
 
 // createClient creates a client based on the configuration

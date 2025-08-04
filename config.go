@@ -5,27 +5,6 @@ import (
 	"time"
 )
 
-// Configuration key constants
-const (
-	configKeyServiceType         = "service_type"
-	configKeyConnectionString    = "connection_string"
-	configKeyTimeout             = "timeout"
-	configKeyMaxRetries          = "max_retries"
-	configKeyAWSRegion           = "aws_region"
-	configKeyAWSAccessKey        = "aws_access_key"
-	configKeyAWSSecretKey        = "aws_secret_key"
-	configKeyAWSSessionToken     = "aws_session_token"
-	configKeyDefaultLockDuration = "default_lock_duration"
-	configKeyDefaultBatchSize    = "default_batch_size"
-)
-
-// Service type constants
-const (
-	ServiceTypeAWSSQS          = "aws_sqs"
-	ServiceTypeAzureServiceBus = "azure_servicebus"
-	ServiceTypeAuto            = "auto"
-)
-
 // ClientConfig contains configuration for a message queue client
 type ClientConfig struct {
 	// Service configuration
@@ -111,6 +90,13 @@ func (c *ClientConfig) Copy() *ClientConfig {
 	}
 }
 
+// DeadLetterConfig contains dead letter queue configuration
+type DeadLetterConfig struct {
+	Enabled          bool   // Whether DLQ is enabled
+	QueueName        string // Dead letter queue name
+	MaxDeliveryCount int    // Maximum delivery count before moving to DLQ
+}
+
 // QueueOptions contains options for creating or configuring a queue
 type QueueOptions struct {
 	// Lock duration for messages (unified visibility timeout/lock duration)
@@ -130,13 +116,6 @@ type QueueOptions struct {
 
 	// Queue size limits
 	MaxQueueSize int64 // Maximum queue size in bytes (-1 for unlimited)
-}
-
-// DeadLetterConfig contains dead letter queue configuration
-type DeadLetterConfig struct {
-	Enabled          bool   // Whether DLQ is enabled
-	QueueName        string // Dead letter queue name
-	MaxDeliveryCount int    // Maximum delivery count before moving to DLQ
 }
 
 // MessageOptions contains options for sending messages

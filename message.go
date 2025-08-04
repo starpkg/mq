@@ -1,7 +1,6 @@
 package mq
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/1set/starlet/dataconv"
@@ -73,109 +72,6 @@ func (m *MessageResult) ToStarlark() (starlark.Value, error) {
 	return dataconv.Marshal(result)
 }
 
-// FromStarlark populates MessageResult from a Starlark value
-func (m *MessageResult) FromStarlark(val starlark.Value) error {
-	dict, ok := val.(*starlark.Dict)
-	if !ok {
-		return fmt.Errorf("expected dict, got %T", val)
-	}
-
-	data, err := convertStarlarkDictToInterface(dict)
-	if err != nil {
-		return err
-	}
-
-	if messageID, ok := data["message_id"].(string); ok {
-		m.MessageID = messageID
-	}
-	if body, ok := data["body"].(string); ok {
-		m.Body = body
-	}
-	if properties, ok := data["properties"].(map[string]interface{}); ok {
-		m.Properties = properties
-	}
-	if sessionID, ok := data["session_id"].(string); ok {
-		m.SessionID = sessionID
-	}
-	if correlationID, ok := data["correlation_id"].(string); ok {
-		m.CorrelationID = correlationID
-	}
-	if replyTo, ok := data["reply_to"].(string); ok {
-		m.ReplyTo = replyTo
-	}
-	if deliveryCount, ok := data["delivery_count"].(int); ok {
-		m.DeliveryCount = deliveryCount
-	}
-	if timeToLive, ok := data["time_to_live"].(int); ok {
-		m.TimeToLive = timeToLive
-	}
-	if receiptHandle, ok := data["receipt_handle"].(string); ok {
-		m.ReceiptHandle = receiptHandle
-	}
-	if success, ok := data["success"].(bool); ok {
-		m.Success = success
-	}
-	if errMsg, ok := data["error"].(string); ok {
-		m.Error = errMsg
-	}
-
-	// Parse time fields
-	if enqueueTimeStr, ok := data["enqueue_time"].(string); ok {
-		if t, err := time.Parse(time.RFC3339, enqueueTimeStr); err == nil {
-			m.EnqueueTime = t
-		}
-	}
-	if scheduledTimeStr, ok := data["scheduled_time"].(string); ok && scheduledTimeStr != "" {
-		if t, err := time.Parse(time.RFC3339, scheduledTimeStr); err == nil {
-			m.ScheduledTime = &t
-		}
-	}
-	if lockExpiresStr, ok := data["lock_expires_at"].(string); ok && lockExpiresStr != "" {
-		if t, err := time.Parse(time.RFC3339, lockExpiresStr); err == nil {
-			m.LockExpiresAt = &t
-		}
-	}
-
-	return nil
-}
-
-// Copy creates a copy of the MessageResult
-func (m *MessageResult) Copy() *MessageResult {
-	result := &MessageResult{
-		MessageID:     m.MessageID,
-		Body:          m.Body,
-		SessionID:     m.SessionID,
-		CorrelationID: m.CorrelationID,
-		ReplyTo:       m.ReplyTo,
-		EnqueueTime:   m.EnqueueTime,
-		DeliveryCount: m.DeliveryCount,
-		TimeToLive:    m.TimeToLive,
-		ReceiptHandle: m.ReceiptHandle,
-		Success:       m.Success,
-		Error:         m.Error,
-	}
-
-	// Copy properties map
-	if m.Properties != nil {
-		result.Properties = make(map[string]interface{})
-		for k, v := range m.Properties {
-			result.Properties[k] = v
-		}
-	}
-
-	// Copy time pointers
-	if m.ScheduledTime != nil {
-		scheduled := *m.ScheduledTime
-		result.ScheduledTime = &scheduled
-	}
-	if m.LockExpiresAt != nil {
-		lockExpires := *m.LockExpiresAt
-		result.LockExpiresAt = &lockExpires
-	}
-
-	return result
-}
-
 // IsExpired checks if the message lock has expired
 func (m *MessageResult) IsExpired() bool {
 	if m.LockExpiresAt == nil {
@@ -217,35 +113,4 @@ func NewMessageResult(messageID, body string) *MessageResult {
 		EnqueueTime: time.Now(),
 		Success:     true,
 	}
-}
-
-// NewErrorMessageResult creates a MessageResult representing an error
-func NewErrorMessageResult(messageID, errorMsg string) *MessageResult {
-	return &MessageResult{
-		MessageID: messageID,
-		Success:   false,
-		Error:     errorMsg,
-	}
-}
-
-// messageResultSliceToStarlark converts a slice of MessageResult to Starlark list
-func messageResultSliceToStarlark(messages []*MessageResult) (starlark.Value, error) {
-	values := make([]starlark.Value, len(messages))
-	for i, msg := range messages {
-		val, err := msg.ToStarlark()
-		if err != nil {
-			return nil, err
-		}
-		values[i] = val
-	}
-	return starlark.NewList(values), nil
-}
-
-// boolSliceToStarlark converts a slice of bool to Starlark list
-func boolSliceToStarlark(bools []bool) starlark.Value {
-	values := make([]starlark.Value, len(bools))
-	for i, b := range bools {
-		values[i] = starlark.Bool(b)
-	}
-	return starlark.NewList(values)
 }

@@ -157,6 +157,28 @@ func max(a, b int) int {
 	return b
 }
 
+// messageResultSliceToStarlark converts a slice of MessageResult to Starlark list
+func messageResultSliceToStarlark(messages []*MessageResult) (starlark.Value, error) {
+	values := make([]starlark.Value, len(messages))
+	for i, msg := range messages {
+		val, err := msg.ToStarlark()
+		if err != nil {
+			return nil, err
+		}
+		values[i] = val
+	}
+	return starlark.NewList(values), nil
+}
+
+// boolSliceToStarlark converts a slice of bool to Starlark list
+func boolSliceToStarlark(bools []bool) starlark.Value {
+	values := make([]starlark.Value, len(bools))
+	for i, b := range bools {
+		values[i] = starlark.Bool(b)
+	}
+	return starlark.NewList(values)
+}
+
 // convertStarlarkDictToInterface converts a Starlark dictionary to a Go map[string]interface{}
 func convertStarlarkDictToInterface(dict *starlark.Dict) (map[string]interface{}, error) {
 	if dict == nil || dict.Len() == 0 {
