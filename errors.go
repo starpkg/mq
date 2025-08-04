@@ -151,9 +151,9 @@ func NormalizeError(service, operation string, err error) error {
 
 	// Service-specific error normalization
 	switch service {
-	case "aws_sqs":
+	case ServiceTypeAWSSQS:
 		return normalizeAWSError(operation, err)
-	case "azure_servicebus":
+	case ServiceTypeAzureServiceBus:
 		return normalizeAzureError(operation, err)
 	default:
 		return NewMQError(ErrorTypeUnknown, service, operation, err.Error(), err)
@@ -167,23 +167,23 @@ func normalizeAWSError(operation string, err error) error {
 	// Map common AWS SQS errors to unified error types
 	switch {
 	case contains(errStr, "QueueDoesNotExist", "NonExistentQueue"):
-		return NewMQError(ErrorTypeNotFound, "aws_sqs", operation, "Queue not found", err)
+		return NewMQError(ErrorTypeNotFound, ServiceTypeAWSSQS, operation, "Queue not found", err)
 	case contains(errStr, "QueueAlreadyExists"):
-		return NewMQError(ErrorTypeAlreadyExists, "aws_sqs", operation, "Queue already exists", err)
+		return NewMQError(ErrorTypeAlreadyExists, ServiceTypeAWSSQS, operation, "Queue already exists", err)
 	case contains(errStr, "MessageNotInflight", "ReceiptHandleIsInvalid"):
-		return NewMQError(ErrorTypeNotFound, "aws_sqs", operation, "Message not found", err)
+		return NewMQError(ErrorTypeNotFound, ServiceTypeAWSSQS, operation, "Message not found", err)
 	case contains(errStr, "InvalidParameterValue", "MalformedInput"):
-		return NewMQError(ErrorTypeValidation, "aws_sqs", operation, "Invalid parameter", err)
+		return NewMQError(ErrorTypeValidation, ServiceTypeAWSSQS, operation, "Invalid parameter", err)
 	case contains(errStr, "AccessDenied", "Forbidden"):
-		return NewMQError(ErrorTypePermission, "aws_sqs", operation, "Access denied", err)
+		return NewMQError(ErrorTypePermission, ServiceTypeAWSSQS, operation, "Access denied", err)
 	case contains(errStr, "RequestThrottled", "Throttling"):
-		return NewMQError(ErrorTypeThrottling, "aws_sqs", operation, "Request throttled", err)
+		return NewMQError(ErrorTypeThrottling, ServiceTypeAWSSQS, operation, "Request throttled", err)
 	case contains(errStr, "ServiceUnavailable", "InternalError"):
-		return NewMQError(ErrorTypeService, "aws_sqs", operation, "Service unavailable", err)
+		return NewMQError(ErrorTypeService, ServiceTypeAWSSQS, operation, "Service unavailable", err)
 	case contains(errStr, "timeout", "context deadline exceeded"):
-		return NewMQError(ErrorTypeTimeout, "aws_sqs", operation, "Operation timed out", err)
+		return NewMQError(ErrorTypeTimeout, ServiceTypeAWSSQS, operation, "Operation timed out", err)
 	default:
-		return NewMQError(ErrorTypeUnknown, "aws_sqs", operation, err.Error(), err)
+		return NewMQError(ErrorTypeUnknown, ServiceTypeAWSSQS, operation, err.Error(), err)
 	}
 }
 
@@ -194,25 +194,25 @@ func normalizeAzureError(operation string, err error) error {
 	// Map common Azure Service Bus errors to unified error types
 	switch {
 	case contains(errStr, "MessagingEntityNotFound", "EntityNotFound"):
-		return NewMQError(ErrorTypeNotFound, "azure_servicebus", operation, "Queue not found", err)
+		return NewMQError(ErrorTypeNotFound, ServiceTypeAzureServiceBus, operation, "Queue not found", err)
 	case contains(errStr, "MessagingEntityAlreadyExists", "EntityAlreadyExists"):
-		return NewMQError(ErrorTypeAlreadyExists, "azure_servicebus", operation, "Queue already exists", err)
+		return NewMQError(ErrorTypeAlreadyExists, ServiceTypeAzureServiceBus, operation, "Queue already exists", err)
 	case contains(errStr, "MessageNotFound", "LockTokenNotFound"):
-		return NewMQError(ErrorTypeNotFound, "azure_servicebus", operation, "Message not found", err)
+		return NewMQError(ErrorTypeNotFound, ServiceTypeAzureServiceBus, operation, "Message not found", err)
 	case contains(errStr, "MessageSizeExceeded", "RequestEntityTooLarge"):
-		return NewMQError(ErrorTypeValidation, "azure_servicebus", operation, "Message too large", err)
+		return NewMQError(ErrorTypeValidation, ServiceTypeAzureServiceBus, operation, "Message too large", err)
 	case contains(errStr, "UnauthorizedAccessException", "Forbidden"):
-		return NewMQError(ErrorTypePermission, "azure_servicebus", operation, "Access denied", err)
+		return NewMQError(ErrorTypePermission, ServiceTypeAzureServiceBus, operation, "Access denied", err)
 	case contains(errStr, "ServerBusyException", "ServiceBusy"):
-		return NewMQError(ErrorTypeThrottling, "azure_servicebus", operation, "Request throttled", err)
+		return NewMQError(ErrorTypeThrottling, ServiceTypeAzureServiceBus, operation, "Request throttled", err)
 	case contains(errStr, "ServiceBusyException", "InternalServerError"):
-		return NewMQError(ErrorTypeService, "azure_servicebus", operation, "Service unavailable", err)
+		return NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, operation, "Service unavailable", err)
 	case contains(errStr, "ArgumentException", "InvalidOperation"):
-		return NewMQError(ErrorTypeValidation, "azure_servicebus", operation, "Invalid parameter", err)
+		return NewMQError(ErrorTypeValidation, ServiceTypeAzureServiceBus, operation, "Invalid parameter", err)
 	case contains(errStr, "timeout", "context deadline exceeded"):
-		return NewMQError(ErrorTypeTimeout, "azure_servicebus", operation, "Operation timed out", err)
+		return NewMQError(ErrorTypeTimeout, ServiceTypeAzureServiceBus, operation, "Operation timed out", err)
 	default:
-		return NewMQError(ErrorTypeUnknown, "azure_servicebus", operation, err.Error(), err)
+		return NewMQError(ErrorTypeUnknown, ServiceTypeAzureServiceBus, operation, err.Error(), err)
 	}
 }
 

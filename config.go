@@ -64,11 +64,11 @@ func (c *ClientConfig) Validate() error {
 	}
 
 	switch c.ServiceType {
-	case "aws_sqs":
+	case ServiceTypeAWSSQS:
 		if c.AWSRegion == "" {
 			return fmt.Errorf("aws_region is required for AWS SQS")
 		}
-	case "azure_servicebus":
+	case ServiceTypeAzureServiceBus:
 		if c.ConnectionString == "" {
 			return fmt.Errorf("connection_string is required for Azure Service Bus")
 		}

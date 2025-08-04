@@ -1,9 +1,7 @@
 package mq
 
 import (
-	"context"
 	"fmt"
-	"math"
 	"math/rand"
 	"time"
 
@@ -11,74 +9,6 @@ import (
 )
 
 // Utility functions for the MQ module
-
-// RetryConfig represents configuration for retry logic
-type RetryConfig struct {
-	MaxRetries int
-	BaseDelay  time.Duration
-	MaxDelay   time.Duration
-	Backoff    float64 // Exponential backoff multiplier
-	Jitter     bool    // Add random jitter to prevent thundering herd
-}
-
-// DefaultRetryConfig returns a default retry configuration
-func DefaultRetryConfig() RetryConfig {
-	return RetryConfig{
-		MaxRetries: 3,
-		BaseDelay:  100 * time.Millisecond,
-		MaxDelay:   30 * time.Second,
-		Backoff:    2.0,
-		Jitter:     true,
-	}
-}
-
-// WithRetry executes a function with retry logic for temporary failures
-func WithRetry(ctx context.Context, config RetryConfig, operation func() error) error {
-	var lastErr error
-
-	for attempt := 0; attempt <= config.MaxRetries; attempt++ {
-		if attempt > 0 {
-			// Calculate delay with exponential backoff
-			delay := time.Duration(float64(config.BaseDelay) * math.Pow(config.Backoff, float64(attempt-1)))
-			if delay > config.MaxDelay {
-				delay = config.MaxDelay
-			}
-
-			// Add jitter if enabled
-			if config.Jitter {
-				jitter := time.Duration(rand.Float64() * float64(delay) * 0.1) // Up to 10% jitter
-				delay = delay + jitter
-			}
-
-			// Check if context was cancelled
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(delay):
-				// Continue with retry
-			}
-		}
-
-		err := operation()
-		if err == nil {
-			return nil // Success
-		}
-
-		lastErr = err
-
-		// Check if the error is retryable
-		if !IsRetryableError(err) {
-			return err // Don't retry non-retryable errors
-		}
-
-		// If this was the last attempt, don't log retry
-		if attempt < config.MaxRetries {
-			// In a real implementation, we might log the retry attempt here
-		}
-	}
-
-	return fmt.Errorf("operation failed after %d retries: %w", config.MaxRetries, lastErr)
-}
 
 // splitIntoBatches splits a slice into batches of specified size
 func splitIntoBatches[T any](items []T, batchSize int) [][]T {
@@ -106,41 +36,6 @@ func splitIntoBatches[T any](items []T, batchSize int) [][]T {
 // splitBatchMessages splits BatchMessage slice into batches
 func splitBatchMessages(messages []BatchMessage, batchSize int) [][]BatchMessage {
 	return splitIntoBatches(messages, batchSize)
-}
-
-// splitStringSlice splits string slice into batches
-func splitStringSlice(items []string, batchSize int) [][]string {
-	return splitIntoBatches(items, batchSize)
-}
-
-// mergeMessageResults merges multiple slices of MessageResult
-func mergeMessageResults(batches ...[]*MessageResult) []*MessageResult {
-	total := 0
-	for _, batch := range batches {
-		total += len(batch)
-	}
-
-	result := make([]*MessageResult, 0, total)
-	for _, batch := range batches {
-		result = append(result, batch...)
-	}
-
-	return result
-}
-
-// mergeBoolResults merges multiple slices of bool
-func mergeBoolResults(batches ...[]bool) []bool {
-	total := 0
-	for _, batch := range batches {
-		total += len(batch)
-	}
-
-	result := make([]bool, 0, total)
-	for _, batch := range batches {
-		result = append(result, batch...)
-	}
-
-	return result
 }
 
 // validateQueueName validates a queue name according to common rules
@@ -218,9 +113,9 @@ func generateMessageID() string {
 // getServiceBatchLimit returns the batch size limit for a service
 func getServiceBatchLimit(serviceType string) int {
 	switch serviceType {
-	case "aws_sqs":
+	case ServiceTypeAWSSQS:
 		return 10
-	case "azure_servicebus":
+	case ServiceTypeAzureServiceBus:
 		return 100
 	default:
 		return 10 // Conservative default
@@ -234,61 +129,6 @@ func adaptBatchSize(serviceType string, requestedSize int) int {
 		return limit
 	}
 	return requestedSize
-}
-
-// calculateTimeout calculates timeout with context deadline
-func calculateTimeout(ctx context.Context, defaultTimeout time.Duration) time.Duration {
-	if deadline, ok := ctx.Deadline(); ok {
-		remaining := time.Until(deadline)
-		if remaining < defaultTimeout {
-			return remaining
-		}
-	}
-	return defaultTimeout
-}
-
-// ensureContext ensures we have a valid context
-func ensureContext(ctx context.Context) context.Context {
-	if ctx == nil {
-		return context.Background()
-	}
-	return ctx
-}
-
-// copyStringMap creates a copy of a string map
-func copyStringMap(m map[string]string) map[string]string {
-	if m == nil {
-		return nil
-	}
-
-	copy := make(map[string]string, len(m))
-	for k, v := range m {
-		copy[k] = v
-	}
-	return copy
-}
-
-// copyInterfaceMap creates a copy of an interface map
-func copyInterfaceMap(m map[string]interface{}) map[string]interface{} {
-	if m == nil {
-		return nil
-	}
-
-	copy := make(map[string]interface{}, len(m))
-	for k, v := range m {
-		copy[k] = v
-	}
-	return copy
-}
-
-// coalesceString returns the first non-empty string
-func coalesceString(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // coalesceInt returns the first non-zero int

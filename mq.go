@@ -21,12 +21,6 @@ var (
 	none = starlark.None
 )
 
-// Ensure ClientWrapper implements the required Starlark interfaces
-var (
-	_ starlark.Value    = (*ClientWrapper)(nil)
-	_ starlark.HasAttrs = (*ClientWrapper)(nil)
-)
-
 // Module wraps the ConfigurableModule with specific functionality for MQ operations
 type Module struct {
 	cfgMod *base.ConfigurableModule
@@ -187,7 +181,7 @@ func starGetSupportedServices(thread *starlark.Thread, b *starlark.Builtin, args
 		return none, err
 	}
 
-	services := []string{"aws_sqs", "azure_servicebus"}
+	services := []string{ServiceTypeAWSSQS, ServiceTypeAzureServiceBus}
 	return dataconv.Marshal(services)
 }
 
@@ -222,16 +216,16 @@ func getConfigValue[T comparable](moduleValue T, override T) T {
 func detectServiceType(config *ClientConfig) string {
 	// If connection string is provided, assume Azure Service Bus
 	if config.ConnectionString != "" {
-		return "azure_servicebus"
+		return ServiceTypeAzureServiceBus
 	}
 
 	// If AWS credentials or region is provided, assume AWS SQS
 	if config.AWSAccessKey != "" || config.AWSSecretKey != "" || config.AWSRegion != "" {
-		return "aws_sqs"
+		return ServiceTypeAWSSQS
 	}
 
 	// Default to AWS SQS
-	return "aws_sqs"
+	return ServiceTypeAWSSQS
 }
 
 // validateConfig validates the client configuration
@@ -241,11 +235,11 @@ func validateConfig(config *ClientConfig) error {
 	}
 
 	switch config.ServiceType {
-	case "aws_sqs":
+	case ServiceTypeAWSSQS:
 		if config.AWSRegion == "" {
 			return fmt.Errorf("aws_region is required for AWS SQS")
 		}
-	case "azure_servicebus":
+	case ServiceTypeAzureServiceBus:
 		if config.ConnectionString == "" {
 			return fmt.Errorf("connection_string is required for Azure Service Bus")
 		}
@@ -267,9 +261,9 @@ func validateConfig(config *ClientConfig) error {
 // createClient creates a client based on the configuration
 func createClient(ctx context.Context, config *ClientConfig) (Client, error) {
 	switch config.ServiceType {
-	case "aws_sqs":
+	case ServiceTypeAWSSQS:
 		return NewAWSSQSClient(ctx, config)
-	case "azure_servicebus":
+	case ServiceTypeAzureServiceBus:
 		return NewAzureServiceBusClient(ctx, config)
 	default:
 		return nil, fmt.Errorf("unsupported service type: %s", config.ServiceType)

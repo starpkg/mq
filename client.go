@@ -54,16 +54,28 @@ type ClientWrapper struct {
 	allNames  []string
 }
 
+// Ensure ClientWrapper implements the required Starlark interfaces
+var (
+	_ starlark.Value    = (*ClientWrapper)(nil)
+	_ starlark.HasAttrs = (*ClientWrapper)(nil)
+)
+
 // NewClientWrapper creates a new ClientWrapper with initialized method maps
 func NewClientWrapper(client Client) *ClientWrapper {
 	cw := &ClientWrapper{
 		client: client,
 	}
+	fw := func(name string, sf dataconv.StarlarkFunc) func() starlark.Value {
+		return func() starlark.Value {
+			return starlark.NewBuiltin(ModuleName+"."+name, sf)
+		}
+	}
 
 	// Initialize method map
 	cw.methodMap = map[string]func() starlark.Value{
 		// Client information
-		"get_client_info": func() starlark.Value { return starlark.NewBuiltin("mq.get_client_info", cw.getClientInfo) },
+		// "get_client_info": func() starlark.Value { return starlark.NewBuiltin("mq.get_client_info", cw.getClientInfo) },
+		"get_client_info": fw("get_client_info", cw.getClientInfo),
 
 		// Queue operations
 		"create_queue": func() starlark.Value { return starlark.NewBuiltin("mq.create_queue", cw.createQueue) },
