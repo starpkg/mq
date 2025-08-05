@@ -818,6 +818,7 @@ func (c *AWSSQSClient) getDLQNameForQueue(ctx context.Context, queueName string)
 		queueName + "-dlq", // Standard pattern
 		strings.Replace(queueName, "-main", "-dlq", 1), // Replace -main with -dlq
 		strings.Replace(queueName, "main", "dlq", 1),   // Replace main with dlq
+		strings.Replace(queueName, "-main", "", 1),     // Remove -main suffix: test-queue-main -> test-queue
 	}
 
 	// Test each name to see if the queue exists
