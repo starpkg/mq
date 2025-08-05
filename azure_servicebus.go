@@ -2,6 +2,7 @@ package mq
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -208,11 +209,22 @@ func (c *AzureServiceBusClient) Purge(ctx context.Context, name string) error {
 	}
 
 	// Receive and complete messages in batches until queue is empty
-	for {
-		messages, err := receiver.ReceiveMessages(ctx, 32, &azservicebus.ReceiveMessagesOptions{
-			TimeAfterFirstMessage: 1 * time.Second, // Short timeout to avoid hanging
+	// Add a safety counter to prevent infinite loops and use timeout
+	maxIterations := 10 // Reduce iterations for faster completion
+	for i := 0; i < maxIterations; i++ {
+		// Create a context with timeout for each batch
+		timeoutCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+
+		messages, err := receiver.ReceiveMessages(timeoutCtx, 32, &azservicebus.ReceiveMessagesOptions{
+			TimeAfterFirstMessage: 1 * time.Second, // Very short timeout for purge
 		})
+		cancel() // Clean up the timeout context
 		if err != nil {
+			// Check if it's a timeout error - this is normal for empty queue
+			if errors.Is(err, context.DeadlineExceeded) {
+				// Queue is likely empty, break the loop
+				break
+			}
 			return NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "purge", "failed to receive messages", err)
 		}
 
@@ -329,14 +341,21 @@ func (c *AzureServiceBusClient) Receive(ctx context.Context, queueName string, o
 		maxCount = 32
 	}
 
-	// Set receive options
+	// Set receive options with reasonable timeout
 	receiveOpts := &azservicebus.ReceiveMessagesOptions{}
 	if options.WaitTime > 0 {
 		receiveOpts.TimeAfterFirstMessage = time.Duration(options.WaitTime) * time.Second
+	} else {
+		// Default timeout to avoid hanging
+		receiveOpts.TimeAfterFirstMessage = 5 * time.Second
 	}
 
-	// Receive messages
-	messages, err := receiver.ReceiveMessages(ctx, int(maxCount), receiveOpts)
+	// Create a context with timeout to avoid hanging indefinitely
+	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	// Receive messages with timeout
+	messages, err := receiver.ReceiveMessages(timeoutCtx, int(maxCount), receiveOpts)
 	if err != nil {
 		return nil, NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "receive", "failed to receive messages", err)
 	}
@@ -605,12 +624,55 @@ func (c *AzureServiceBusClient) Peek(ctx context.Context, queueName string, maxC
 
 // DeadLetterReceive receives messages from the dead letter queue
 func (c *AzureServiceBusClient) DeadLetterReceive(ctx context.Context, queueName string, maxCount int) ([]*MessageResult, error) {
-	// For Azure Service Bus, dead letter queue is a subqueue
-	dlqPath := queueName + "/$deadletterqueue"
-	options := ReceiveOptions{
-		MaxCount: maxCount,
+	// Azure Service Bus dead letter queues are accessed through special receivers
+	receiver, err := c.client.NewReceiverForQueue(queueName, &azservicebus.ReceiverOptions{
+		ReceiveMode: azservicebus.ReceiveModePeekLock,
+		SubQueue:    azservicebus.SubQueueDeadLetter,
+	})
+	if err != nil {
+		return nil, NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "dead_letter_receive", "failed to create DLQ receiver", err)
 	}
-	return c.Receive(ctx, dlqPath, options)
+	defer receiver.Close(ctx)
+
+	// Determine the number of messages to receive
+	if maxCount <= 0 {
+		maxCount = 1
+	}
+	if maxCount > 32 { // Azure Service Bus limit
+		maxCount = 32
+	}
+
+	// Create a context with timeout to avoid hanging
+	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	// Set receive options with shorter timeout
+	receiveOpts := &azservicebus.ReceiveMessagesOptions{
+		TimeAfterFirstMessage: 2 * time.Second, // Short timeout for DLQ
+	}
+
+	// Receive messages from dead letter queue with timeout
+	messages, err := receiver.ReceiveMessages(timeoutCtx, int(maxCount), receiveOpts)
+	if err != nil {
+		// Check if it's a timeout error - this is normal for empty DLQ
+		if errors.Is(err, context.DeadlineExceeded) {
+			// Return empty result for timeout (normal case for empty DLQ)
+			return []*MessageResult{}, nil
+		}
+		return nil, NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "dead_letter_receive", "failed to receive DLQ messages", err)
+	}
+
+	// Convert to unified message results
+	results := make([]*MessageResult, len(messages))
+	for i, msg := range messages {
+		result, err := c.convertFromAzureMessage(msg)
+		if err != nil {
+			return nil, NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "dead_letter_receive", "failed to convert DLQ message", err)
+		}
+		results[i] = result
+	}
+
+	return results, nil
 }
 
 // DeadLetterRequeue moves a message back from DLQ to main queue
@@ -626,8 +688,52 @@ func (c *AzureServiceBusClient) DeadLetterRequeue(ctx context.Context, queueName
 
 // DeadLetterPurge purges all messages from the dead letter queue
 func (c *AzureServiceBusClient) DeadLetterPurge(ctx context.Context, queueName string) error {
-	dlqPath := queueName + "/$deadletterqueue"
-	return c.Purge(ctx, dlqPath)
+	// Azure Service Bus dead letter queues are accessed through special receivers
+	receiver, err := c.client.NewReceiverForQueue(queueName, &azservicebus.ReceiverOptions{
+		ReceiveMode: azservicebus.ReceiveModePeekLock,
+		SubQueue:    azservicebus.SubQueueDeadLetter,
+	})
+	if err != nil {
+		return NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "dead_letter_purge", "failed to create DLQ receiver", err)
+	}
+	defer receiver.Close(ctx)
+
+	// Receive and complete messages in batches until DLQ is empty
+	// Add a safety counter to prevent infinite loops and use timeout
+	maxIterations := 10 // Reduce iterations for faster completion
+	for i := 0; i < maxIterations; i++ {
+		// Create a context with timeout for each batch
+		timeoutCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+
+		messages, err := receiver.ReceiveMessages(timeoutCtx, 32, &azservicebus.ReceiveMessagesOptions{
+			TimeAfterFirstMessage: 1 * time.Second, // Very short timeout for DLQ purge
+		})
+		cancel() // Clean up the timeout context
+		if err != nil {
+			// Check if it's a timeout error - this is normal for empty DLQ
+			if errors.Is(err, context.DeadlineExceeded) {
+				// DLQ is likely empty, break the loop
+				break
+			}
+			return NewMQError(ErrorTypeService, ServiceTypeAzureServiceBus, "dead_letter_purge", "failed to receive DLQ messages", err)
+		}
+
+		// If no messages received, DLQ is empty
+		if len(messages) == 0 {
+			break
+		}
+
+		// Complete all received messages to remove them from DLQ
+		for _, msg := range messages {
+			err = receiver.CompleteMessage(ctx, msg, nil)
+			if err != nil {
+				// Log the error but continue purging other messages
+				continue
+			}
+		}
+	}
+
+	return nil
 }
 
 // Close closes the client connection
@@ -718,8 +824,10 @@ func (c *AzureServiceBusClient) getReceiver(ctx context.Context, queueName strin
 		ReceiveMode: azservicebus.ReceiveModePeekLock,
 	}
 
+	// Try creating a regular receiver first
 	newReceiver, err := c.client.NewReceiverForQueue(queueName, receiverOpts)
 	if err != nil {
+		// If the error indicates that the queue requires sessions, the caller should handle it
 		return nil, fmt.Errorf("failed to create receiver for queue %s: %w", queueName, err)
 	}
 

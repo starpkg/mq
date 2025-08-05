@@ -118,8 +118,12 @@ func (c *AWSSQSClient) CreateQueue(ctx context.Context, name string, options Que
 		}
 		_, err := c.sqs.CreateQueue(dlqInput)
 		if err != nil {
-			// Continue if DLQ already exists, otherwise return error
-			// TODO: Check if error is "QueueAlreadyExists" and continue, otherwise fail
+			// Check if error is "QueueAlreadyExists" and continue, otherwise fail
+			errStr := err.Error()
+			if !strings.Contains(errStr, "QueueAlreadyExists") {
+				return nil, NewMQError(ErrorTypeService, ServiceTypeAWSSQS, "create_queue", "failed to create dead letter queue", err)
+			}
+			// DLQ already exists, continue
 		}
 	}
 
@@ -135,7 +139,25 @@ func (c *AWSSQSClient) CreateQueue(ctx context.Context, name string, options Que
 	// Create the queue
 	result, err := c.sqs.CreateQueue(input)
 	if err != nil {
-		return nil, NewMQError(ErrorTypeService, ServiceTypeAWSSQS, "create_queue", "failed to create queue", err)
+		// Check if queue already exists with different attributes
+		errStr := err.Error()
+		if strings.Contains(errStr, "QueueAlreadyExists") {
+			// Queue exists but with different attributes - try to get the existing queue
+			getURLInput := &sqs.GetQueueUrlInput{
+				QueueName: aws.String(queueName),
+			}
+			urlResult, getErr := c.sqs.GetQueueUrl(getURLInput)
+			if getErr == nil && urlResult.QueueUrl != nil {
+				// Use the existing queue URL
+				result = &sqs.CreateQueueOutput{
+					QueueUrl: urlResult.QueueUrl,
+				}
+			} else {
+				return nil, NewMQError(ErrorTypeService, ServiceTypeAWSSQS, "create_queue", "failed to create queue", err)
+			}
+		} else {
+			return nil, NewMQError(ErrorTypeService, ServiceTypeAWSSQS, "create_queue", "failed to create queue", err)
+		}
 	}
 
 	var queueURL string
@@ -730,12 +752,93 @@ func (c *AWSSQSClient) Peek(ctx context.Context, queueName string, maxCount int)
 
 // DeadLetterReceive receives messages from the dead letter queue
 func (c *AWSSQSClient) DeadLetterReceive(ctx context.Context, queueName string, maxCount int) ([]*MessageResult, error) {
-	// For AWS SQS, dead letter queue is a separate queue
-	dlqName := queueName + "-dlq"
+	// For AWS SQS, we need to determine the DLQ name
+	// First, try to get queue attributes to find the DLQ configuration
+	dlqName, err := c.getDLQNameForQueue(ctx, queueName)
+	if err != nil {
+		return nil, err
+	}
+
 	options := ReceiveOptions{
 		MaxCount: maxCount,
 	}
 	return c.Receive(ctx, dlqName, options)
+}
+
+// getDLQNameForQueue attempts to find the DLQ name for a given queue
+func (c *AWSSQSClient) getDLQNameForQueue(ctx context.Context, queueName string) (string, error) {
+	// Get queue URL first
+	getURLInput := &sqs.GetQueueUrlInput{
+		QueueName: aws.String(queueName),
+	}
+
+	urlResult, err := c.sqs.GetQueueUrl(getURLInput)
+	if err != nil {
+		return "", NewMQError(ErrorTypeNotFound, ServiceTypeAWSSQS, "get_dlq_name", "main queue not found", err)
+	}
+
+	if urlResult.QueueUrl == nil {
+		return "", NewMQError(ErrorTypeNotFound, ServiceTypeAWSSQS, "get_dlq_name", "main queue URL not found", nil)
+	}
+
+	// Get queue attributes to check for redrive policy
+	getAttrsInput := &sqs.GetQueueAttributesInput{
+		QueueUrl: urlResult.QueueUrl,
+		AttributeNames: []*string{
+			aws.String("RedrivePolicy"),
+		},
+	}
+
+	attrsResult, err := c.sqs.GetQueueAttributes(getAttrsInput)
+	if err != nil {
+		// If we can't get attributes, fall back to conventional naming
+		return queueName + "-dlq", nil
+	}
+
+	// Parse redrive policy to get DLQ ARN
+	if redrivePolicy, exists := attrsResult.Attributes["RedrivePolicy"]; exists && redrivePolicy != nil {
+		// Parse the JSON to extract DLQ ARN
+		// For simplicity, we'll try common patterns first
+		if strings.Contains(*redrivePolicy, "deadLetterTargetArn") {
+			// Try to extract queue name from ARN
+			// ARN format: arn:aws:sqs:region:account:queue-name
+			start := strings.LastIndex(*redrivePolicy, ":")
+			end := strings.Index((*redrivePolicy)[start:], "\"")
+			if start != -1 && end != -1 {
+				dlqName := (*redrivePolicy)[start+1 : start+end]
+				if dlqName != "" {
+					return dlqName, nil
+				}
+			}
+		}
+	}
+
+	// Fallback: try conventional naming patterns
+	conventionalNames := []string{
+		queueName + "-dlq", // Standard pattern
+		strings.Replace(queueName, "-main", "-dlq", 1), // Replace -main with -dlq
+		strings.Replace(queueName, "main", "dlq", 1),   // Replace main with dlq
+	}
+
+	// Test each name to see if the queue exists
+	for _, name := range conventionalNames {
+		if c.queueExists(ctx, name) {
+			return name, nil
+		}
+	}
+
+	// If nothing found, use the standard convention
+	return queueName + "-dlq", nil
+}
+
+// queueExists checks if a queue exists
+func (c *AWSSQSClient) queueExists(ctx context.Context, queueName string) bool {
+	getURLInput := &sqs.GetQueueUrlInput{
+		QueueName: aws.String(queueName),
+	}
+
+	_, err := c.sqs.GetQueueUrl(getURLInput)
+	return err == nil
 }
 
 // DeadLetterRequeue moves a message back from DLQ to main queue
