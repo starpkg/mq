@@ -8,19 +8,20 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/sqs"
-	"github.com/aws/aws-sdk-go/service/sts"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
 // AWSSQSClient implements the Client interface for AWS SQS
 type AWSSQSClient struct {
 	config    *ClientConfig
 	region    string
-	sqs       *sqs.SQS
-	sts       *sts.STS
+	sqs       *sqs.Client
+	sts       *sts.Client
 	accountID string
 	accountMu sync.Once
 }
@@ -35,15 +36,15 @@ func NewAWSSQSClient(ctx context.Context, config *ClientConfig) (Client, error) 
 		return nil, fmt.Errorf("aws_region is required for AWS SQS")
 	}
 
-	// Create AWS session
-	sess, err := createAWSSession(config)
+	// Load AWS configuration
+	awsCfg, err := createAWSConfig(ctx, config)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create AWS session: %w", err)
+		return nil, fmt.Errorf("failed to create AWS config: %w", err)
 	}
 
 	// Create SQS and STS services
-	sqsService := sqs.New(sess)
-	stsService := sts.New(sess)
+	sqsService := sqs.NewFromConfig(awsCfg)
+	stsService := sts.NewFromConfig(awsCfg)
 
 	client := &AWSSQSClient{
 		config: config.Copy(),
@@ -55,29 +56,34 @@ func NewAWSSQSClient(ctx context.Context, config *ClientConfig) (Client, error) 
 	return client, nil
 }
 
-// createAWSSession creates AWS session with credentials using SDK v1
-func createAWSSession(mqConfig *ClientConfig) (*session.Session, error) {
-	// Build AWS config
-	awsConfig := &aws.Config{
-		Region: aws.String(mqConfig.AWSRegion),
-	}
+// createAWSConfig loads AWS configuration with optional static credentials.
+func createAWSConfig(ctx context.Context, mqConfig *ClientConfig) (aws.Config, error) {
+	ctx = awsRequestContext(ctx)
 
-	// Set credentials if provided
+	loadOptions := []func(*awsconfig.LoadOptions) error{
+		awsconfig.WithRegion(mqConfig.AWSRegion),
+	}
 	if mqConfig.AWSAccessKey != "" && mqConfig.AWSSecretKey != "" {
-		awsConfig.Credentials = credentials.NewStaticCredentials(
+		loadOptions = append(loadOptions, awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
 			mqConfig.AWSAccessKey,
 			mqConfig.AWSSecretKey,
 			mqConfig.AWSSessionToken,
-		)
+		)))
 	}
 
-	// Create session
-	sess, err := session.NewSession(awsConfig)
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, loadOptions...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create AWS session: %w", err)
+		return aws.Config{}, fmt.Errorf("failed to create AWS config: %w", err)
 	}
 
-	return sess, nil
+	return cfg, nil
+}
+
+func awsRequestContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
 }
 
 // GetClientInfo returns information about the client
@@ -95,6 +101,7 @@ func (c *AWSSQSClient) CreateQueue(ctx context.Context, name string, options Que
 	if err := validateQueueName(name); err != nil {
 		return nil, NewMQError(ErrorTypeValidation, ServiceTypeAWSSQS, "create_queue", "invalid queue name", err)
 	}
+	ctx = awsRequestContext(ctx)
 
 	// Handle FIFO queue naming
 	queueName := name
@@ -116,7 +123,7 @@ func (c *AWSSQSClient) CreateQueue(ctx context.Context, name string, options Que
 		dlqInput := &sqs.CreateQueueInput{
 			QueueName: aws.String(dlqName),
 		}
-		_, err := c.sqs.CreateQueue(dlqInput)
+		_, err := c.sqs.CreateQueue(ctx, dlqInput)
 		if err != nil {
 			// Check if error is "QueueAlreadyExists" and continue, otherwise fail
 			errStr := err.Error()
@@ -133,11 +140,11 @@ func (c *AWSSQSClient) CreateQueue(ctx context.Context, name string, options Que
 	// Create queue request
 	input := &sqs.CreateQueueInput{
 		QueueName:  aws.String(queueName),
-		Attributes: aws.StringMap(attributes),
+		Attributes: attributes,
 	}
 
 	// Create the queue
-	result, err := c.sqs.CreateQueue(input)
+	result, err := c.sqs.CreateQueue(ctx, input)
 	if err != nil {
 		// Check if queue already exists with different attributes
 		errStr := err.Error()
@@ -146,7 +153,7 @@ func (c *AWSSQSClient) CreateQueue(ctx context.Context, name string, options Que
 			getURLInput := &sqs.GetQueueUrlInput{
 				QueueName: aws.String(queueName),
 			}
-			urlResult, getErr := c.sqs.GetQueueUrl(getURLInput)
+			urlResult, getErr := c.sqs.GetQueueUrl(ctx, getURLInput)
 			if getErr == nil && urlResult.QueueUrl != nil {
 				// Use the existing queue URL
 				result = &sqs.CreateQueueOutput{
@@ -186,12 +193,14 @@ func (c *AWSSQSClient) CreateQueue(ctx context.Context, name string, options Que
 
 // DeleteQueue deletes an SQS queue
 func (c *AWSSQSClient) DeleteQueue(ctx context.Context, name string) error {
+	ctx = awsRequestContext(ctx)
+
 	// Get queue URL first
 	getURLInput := &sqs.GetQueueUrlInput{
 		QueueName: aws.String(name),
 	}
 
-	urlResult, err := c.sqs.GetQueueUrl(getURLInput)
+	urlResult, err := c.sqs.GetQueueUrl(ctx, getURLInput)
 	if err != nil {
 		return NewMQError(ErrorTypeNotFound, ServiceTypeAWSSQS, "delete_queue", "queue not found", err)
 	}
@@ -205,7 +214,7 @@ func (c *AWSSQSClient) DeleteQueue(ctx context.Context, name string) error {
 		QueueUrl: urlResult.QueueUrl,
 	}
 
-	_, err = c.sqs.DeleteQueue(deleteInput)
+	_, err = c.sqs.DeleteQueue(ctx, deleteInput)
 	if err != nil {
 		return NewMQError(ErrorTypeService, ServiceTypeAWSSQS, "delete_queue", "failed to delete queue", err)
 	}
@@ -215,24 +224,22 @@ func (c *AWSSQSClient) DeleteQueue(ctx context.Context, name string) error {
 
 // ListQueues lists SQS queues
 func (c *AWSSQSClient) ListQueues(ctx context.Context, prefix string) ([]*Queue, error) {
+	ctx = awsRequestContext(ctx)
+
 	input := &sqs.ListQueuesInput{}
 	if prefix != "" {
 		input.QueueNamePrefix = aws.String(prefix)
 	}
 
-	result, err := c.sqs.ListQueues(input)
+	result, err := c.sqs.ListQueues(ctx, input)
 	if err != nil {
 		return nil, NewMQError(ErrorTypeService, ServiceTypeAWSSQS, "list_queues", "failed to list queues", err)
 	}
 
 	var queues []*Queue
 	for _, queueURL := range result.QueueUrls {
-		if queueURL == nil {
-			continue
-		}
-
 		// Extract queue name from URL
-		urlParts := strings.Split(*queueURL, "/")
+		urlParts := strings.Split(queueURL, "/")
 		if len(urlParts) == 0 {
 			continue
 		}
@@ -240,7 +247,7 @@ func (c *AWSSQSClient) ListQueues(ctx context.Context, prefix string) ([]*Queue,
 
 		// Create basic queue object
 		queue := NewQueue(queueName, ServiceTypeAWSSQS)
-		queue.URL = *queueURL
+		queue.URL = queueURL
 		queue.LockDuration = c.config.DefaultLockDuration
 		queue.RetentionPeriod = 1209600 // 14 days default
 		queue.MaxDeliveryCount = 10
@@ -256,13 +263,14 @@ func (c *AWSSQSClient) GetQueue(ctx context.Context, name string) (*Queue, error
 	if name == "" {
 		return nil, NewMQError(ErrorTypeNotFound, ServiceTypeAWSSQS, "get_queue", "queue not found", nil)
 	}
+	ctx = awsRequestContext(ctx)
 
 	// Get queue URL first
 	getURLInput := &sqs.GetQueueUrlInput{
 		QueueName: aws.String(name),
 	}
 
-	urlResult, err := c.sqs.GetQueueUrl(getURLInput)
+	urlResult, err := c.sqs.GetQueueUrl(ctx, getURLInput)
 	if err != nil {
 		return nil, NewMQError(ErrorTypeNotFound, ServiceTypeAWSSQS, "get_queue", "queue not found", err)
 	}
@@ -274,10 +282,10 @@ func (c *AWSSQSClient) GetQueue(ctx context.Context, name string) (*Queue, error
 	// Get queue attributes
 	getAttrsInput := &sqs.GetQueueAttributesInput{
 		QueueUrl:       urlResult.QueueUrl,
-		AttributeNames: []*string{aws.String("All")},
+		AttributeNames: []types.QueueAttributeName{types.QueueAttributeNameAll},
 	}
 
-	attrsResult, err := c.sqs.GetQueueAttributes(getAttrsInput)
+	attrsResult, err := c.sqs.GetQueueAttributes(ctx, getAttrsInput)
 	if err != nil {
 		return nil, NewMQError(ErrorTypeService, ServiceTypeAWSSQS, "get_queue", "failed to get queue attributes", err)
 	}
@@ -288,17 +296,17 @@ func (c *AWSSQSClient) GetQueue(ctx context.Context, name string) (*Queue, error
 
 	// Parse attributes
 	if attrsResult.Attributes != nil {
-		if val, ok := attrsResult.Attributes["VisibilityTimeout"]; ok && val != nil {
-			if lockDuration, err := strconv.Atoi(*val); err == nil {
+		if val, ok := attrsResult.Attributes[string(types.QueueAttributeNameVisibilityTimeout)]; ok {
+			if lockDuration, err := strconv.Atoi(val); err == nil {
 				queue.LockDuration = lockDuration
 			}
 		}
-		if val, ok := attrsResult.Attributes["MessageRetentionPeriod"]; ok && val != nil {
-			if retention, err := strconv.Atoi(*val); err == nil {
+		if val, ok := attrsResult.Attributes[string(types.QueueAttributeNameMessageRetentionPeriod)]; ok {
+			if retention, err := strconv.Atoi(val); err == nil {
 				queue.RetentionPeriod = retention
 			}
 		}
-		if val, ok := attrsResult.Attributes["RedrivePolicy"]; ok && val != nil {
+		if _, ok := attrsResult.Attributes[string(types.QueueAttributeNameRedrivePolicy)]; ok {
 			// Parse redrive policy to extract max delivery count
 			// This is a simplified implementation
 			queue.MaxDeliveryCount = 10 // Default value
@@ -324,13 +332,14 @@ func (c *AWSSQSClient) Exists(ctx context.Context, name string) (bool, error) {
 	if name == "" {
 		return false, nil
 	}
+	ctx = awsRequestContext(ctx)
 
 	// Try to get queue URL
 	input := &sqs.GetQueueUrlInput{
 		QueueName: aws.String(name),
 	}
 
-	_, err := c.sqs.GetQueueUrl(input)
+	_, err := c.sqs.GetQueueUrl(ctx, input)
 	if err != nil {
 		// Check if it's a "queue not found" error
 		return false, nil
@@ -358,13 +367,14 @@ func (c *AWSSQSClient) Send(ctx context.Context, queueName, body string, options
 	if err := validateMessageBody(body); err != nil {
 		return nil, NewMQError(ErrorTypeValidation, ServiceTypeAWSSQS, "send", "invalid message body", err)
 	}
+	ctx = awsRequestContext(ctx)
 
 	// Get queue URL
 	getURLInput := &sqs.GetQueueUrlInput{
 		QueueName: aws.String(queueName),
 	}
 
-	urlResult, err := c.sqs.GetQueueUrl(getURLInput)
+	urlResult, err := c.sqs.GetQueueUrl(ctx, getURLInput)
 	if err != nil {
 		return nil, NewMQError(ErrorTypeNotFound, ServiceTypeAWSSQS, "send", "queue not found", err)
 	}
@@ -381,9 +391,9 @@ func (c *AWSSQSClient) Send(ctx context.Context, queueName, body string, options
 
 	// Set message attributes if provided
 	if options.Properties != nil {
-		messageAttrs := make(map[string]*sqs.MessageAttributeValue)
+		messageAttrs := make(map[string]types.MessageAttributeValue)
 		for k, v := range options.Properties {
-			messageAttrs[k] = &sqs.MessageAttributeValue{
+			messageAttrs[k] = types.MessageAttributeValue{
 				StringValue: aws.String(fmt.Sprintf("%v", v)),
 				DataType:    aws.String("String"),
 			}
@@ -400,7 +410,7 @@ func (c *AWSSQSClient) Send(ctx context.Context, queueName, body string, options
 				return nil, NewMQError(ErrorTypeValidation, ServiceTypeAWSSQS, "send",
 					"AWS SQS supports maximum delay of 15 minutes", nil)
 			}
-			input.DelaySeconds = aws.Int64(delaySecs)
+			input.DelaySeconds = int32(delaySecs)
 		}
 	}
 
@@ -415,7 +425,7 @@ func (c *AWSSQSClient) Send(ctx context.Context, queueName, body string, options
 	}
 
 	// Send the message
-	result, err := c.sqs.SendMessage(input)
+	result, err := c.sqs.SendMessage(ctx, input)
 	if err != nil {
 		return nil, NewMQError(ErrorTypeService, ServiceTypeAWSSQS, "send", "failed to send message", err)
 	}
@@ -439,12 +449,14 @@ func (c *AWSSQSClient) Send(ctx context.Context, queueName, body string, options
 
 // Receive receives messages from a queue
 func (c *AWSSQSClient) Receive(ctx context.Context, queueName string, options ReceiveOptions) ([]*MessageResult, error) {
+	ctx = awsRequestContext(ctx)
+
 	// Get queue URL
 	getURLInput := &sqs.GetQueueUrlInput{
 		QueueName: aws.String(queueName),
 	}
 
-	urlResult, err := c.sqs.GetQueueUrl(getURLInput)
+	urlResult, err := c.sqs.GetQueueUrl(ctx, getURLInput)
 	if err != nil {
 		return nil, NewMQError(ErrorTypeNotFound, ServiceTypeAWSSQS, "receive", "queue not found", err)
 	}
@@ -466,7 +478,7 @@ func (c *AWSSQSClient) Receive(ctx context.Context, queueName string, options Re
 	if maxCount > 10 {
 		maxCount = 10
 	}
-	input.MaxNumberOfMessages = aws.Int64(int64(maxCount))
+	input.MaxNumberOfMessages = int32(maxCount)
 
 	// Set wait time for long polling
 	if options.WaitTime > 0 {
@@ -474,44 +486,41 @@ func (c *AWSSQSClient) Receive(ctx context.Context, queueName string, options Re
 		if waitTime > 20 { // AWS SQS max wait time is 20 seconds
 			waitTime = 20
 		}
-		input.WaitTimeSeconds = aws.Int64(int64(waitTime))
+		input.WaitTimeSeconds = int32(waitTime)
 	}
 
 	// Set visibility timeout if provided
 	if options.LockDuration != nil && *options.LockDuration > 0 {
-		input.VisibilityTimeout = aws.Int64(int64(*options.LockDuration))
+		input.VisibilityTimeout = int32(*options.LockDuration)
 	}
 
 	// Request all message attributes
-	input.MessageAttributeNames = []*string{aws.String("All")}
+	input.MessageAttributeNames = []string{"All"}
+	input.MessageSystemAttributeNames = []types.MessageSystemAttributeName{types.MessageSystemAttributeNameAll}
 
 	// Receive messages
-	result, err := c.sqs.ReceiveMessage(input)
+	result, err := c.sqs.ReceiveMessage(ctx, input)
 	if err != nil {
 		return nil, NewMQError(ErrorTypeService, ServiceTypeAWSSQS, "receive", "failed to receive messages", err)
 	}
 
 	var messages []*MessageResult
 	for _, sqsMsg := range result.Messages {
-		if sqsMsg == nil {
-			continue
-		}
-
 		// Create message result
 		msgResult := &MessageResult{
-			MessageID:     aws.StringValue(sqsMsg.MessageId),
-			Body:          aws.StringValue(sqsMsg.Body),
+			MessageID:     aws.ToString(sqsMsg.MessageId),
+			Body:          aws.ToString(sqsMsg.Body),
 			Properties:    make(map[string]interface{}),
 			EnqueueTime:   time.Now(), // SQS doesn't provide exact enqueue time easily
 			DeliveryCount: 1,          // SQS doesn't provide this directly
-			ReceiptHandle: aws.StringValue(sqsMsg.ReceiptHandle),
+			ReceiptHandle: aws.ToString(sqsMsg.ReceiptHandle),
 			Success:       true,
 		}
 
 		// Convert message attributes to properties
 		if sqsMsg.MessageAttributes != nil {
 			for k, v := range sqsMsg.MessageAttributes {
-				if v != nil && v.StringValue != nil {
+				if v.StringValue != nil {
 					msgResult.Properties[k] = *v.StringValue
 				}
 			}
@@ -519,13 +528,13 @@ func (c *AWSSQSClient) Receive(ctx context.Context, queueName string, options Re
 
 		// Parse system attributes if available
 		if sqsMsg.Attributes != nil {
-			if val, ok := sqsMsg.Attributes["ApproximateReceiveCount"]; ok && val != nil {
-				if count, err := strconv.Atoi(*val); err == nil {
+			if val, ok := sqsMsg.Attributes[string(types.MessageSystemAttributeNameApproximateReceiveCount)]; ok {
+				if count, err := strconv.Atoi(val); err == nil {
 					msgResult.DeliveryCount = count
 				}
 			}
-			if val, ok := sqsMsg.Attributes["SentTimestamp"]; ok && val != nil {
-				if timestamp, err := strconv.ParseInt(*val, 10, 64); err == nil {
+			if val, ok := sqsMsg.Attributes[string(types.MessageSystemAttributeNameSentTimestamp)]; ok {
+				if timestamp, err := strconv.ParseInt(val, 10, 64); err == nil {
 					msgResult.EnqueueTime = time.Unix(timestamp/1000, 0)
 				}
 			}
@@ -542,13 +551,14 @@ func (c *AWSSQSClient) Delete(ctx context.Context, queueName string, messageIDs 
 	if len(messageIDs) == 0 {
 		return []bool{}, nil
 	}
+	ctx = awsRequestContext(ctx)
 
 	// Get queue URL
 	getURLInput := &sqs.GetQueueUrlInput{
 		QueueName: aws.String(queueName),
 	}
 
-	urlResult, err := c.sqs.GetQueueUrl(getURLInput)
+	urlResult, err := c.sqs.GetQueueUrl(ctx, getURLInput)
 	if err != nil {
 		return nil, NewMQError(ErrorTypeNotFound, ServiceTypeAWSSQS, "delete", "queue not found", err)
 	}
@@ -611,11 +621,12 @@ func (c *AWSSQSClient) deleteBatch(ctx context.Context, queueURL string, receipt
 	if len(receiptHandles) == 0 {
 		return []bool{}, nil
 	}
+	ctx = awsRequestContext(ctx)
 
 	// Build delete entries
-	var entries []*sqs.DeleteMessageBatchRequestEntry
+	var entries []types.DeleteMessageBatchRequestEntry
 	for i, handle := range receiptHandles {
-		entries = append(entries, &sqs.DeleteMessageBatchRequestEntry{
+		entries = append(entries, types.DeleteMessageBatchRequestEntry{
 			Id:            aws.String(fmt.Sprintf("msg%d", i)),
 			ReceiptHandle: aws.String(handle),
 		})
@@ -627,7 +638,7 @@ func (c *AWSSQSClient) deleteBatch(ctx context.Context, queueURL string, receipt
 		Entries:  entries,
 	}
 
-	result, err := c.sqs.DeleteMessageBatch(input)
+	result, err := c.sqs.DeleteMessageBatch(ctx, input)
 	if err != nil {
 		// If the entire batch fails, check if it's due to invalid receipt handles
 		// For the unified API, we'll treat invalid handles as successful deletion
@@ -649,7 +660,7 @@ func (c *AWSSQSClient) deleteBatch(ctx context.Context, queueURL string, receipt
 
 	// Mark successful deletions
 	for _, success := range result.Successful {
-		if success != nil && success.Id != nil {
+		if success.Id != nil {
 			// Parse ID to get index
 			id := *success.Id
 			if len(id) > 3 { // "msg" prefix
@@ -767,12 +778,14 @@ func (c *AWSSQSClient) DeadLetterReceive(ctx context.Context, queueName string, 
 
 // getDLQNameForQueue attempts to find the DLQ name for a given queue
 func (c *AWSSQSClient) getDLQNameForQueue(ctx context.Context, queueName string) (string, error) {
+	ctx = awsRequestContext(ctx)
+
 	// Get queue URL first
 	getURLInput := &sqs.GetQueueUrlInput{
 		QueueName: aws.String(queueName),
 	}
 
-	urlResult, err := c.sqs.GetQueueUrl(getURLInput)
+	urlResult, err := c.sqs.GetQueueUrl(ctx, getURLInput)
 	if err != nil {
 		return "", NewMQError(ErrorTypeNotFound, ServiceTypeAWSSQS, "get_dlq_name", "main queue not found", err)
 	}
@@ -784,28 +797,28 @@ func (c *AWSSQSClient) getDLQNameForQueue(ctx context.Context, queueName string)
 	// Get queue attributes to check for redrive policy
 	getAttrsInput := &sqs.GetQueueAttributesInput{
 		QueueUrl: urlResult.QueueUrl,
-		AttributeNames: []*string{
-			aws.String("RedrivePolicy"),
+		AttributeNames: []types.QueueAttributeName{
+			types.QueueAttributeNameRedrivePolicy,
 		},
 	}
 
-	attrsResult, err := c.sqs.GetQueueAttributes(getAttrsInput)
+	attrsResult, err := c.sqs.GetQueueAttributes(ctx, getAttrsInput)
 	if err != nil {
 		// If we can't get attributes, fall back to conventional naming
 		return queueName + "-dlq", nil
 	}
 
 	// Parse redrive policy to get DLQ ARN
-	if redrivePolicy, exists := attrsResult.Attributes["RedrivePolicy"]; exists && redrivePolicy != nil {
+	if redrivePolicy, exists := attrsResult.Attributes[string(types.QueueAttributeNameRedrivePolicy)]; exists {
 		// Parse the JSON to extract DLQ ARN
 		// For simplicity, we'll try common patterns first
-		if strings.Contains(*redrivePolicy, "deadLetterTargetArn") {
+		if strings.Contains(redrivePolicy, "deadLetterTargetArn") {
 			// Try to extract queue name from ARN
 			// ARN format: arn:aws:sqs:region:account:queue-name
-			start := strings.LastIndex(*redrivePolicy, ":")
-			end := strings.Index((*redrivePolicy)[start:], "\"")
+			start := strings.LastIndex(redrivePolicy, ":")
+			end := strings.Index(redrivePolicy[start:], "\"")
 			if start != -1 && end != -1 {
-				dlqName := (*redrivePolicy)[start+1 : start+end]
+				dlqName := redrivePolicy[start+1 : start+end]
 				if dlqName != "" {
 					return dlqName, nil
 				}
@@ -834,11 +847,13 @@ func (c *AWSSQSClient) getDLQNameForQueue(ctx context.Context, queueName string)
 
 // queueExists checks if a queue exists
 func (c *AWSSQSClient) queueExists(ctx context.Context, queueName string) bool {
+	ctx = awsRequestContext(ctx)
+
 	getURLInput := &sqs.GetQueueUrlInput{
 		QueueName: aws.String(queueName),
 	}
 
-	_, err := c.sqs.GetQueueUrl(getURLInput)
+	_, err := c.sqs.GetQueueUrl(ctx, getURLInput)
 	return err == nil
 }
 
@@ -879,14 +894,14 @@ func (c *AWSSQSClient) convertToSQSAttributes(queueName string, options QueueOpt
 			lockDuration = 30 // AWS SQS default
 		}
 	}
-	attrs["VisibilityTimeout"] = strconv.Itoa(lockDuration)
+	attrs[string(types.QueueAttributeNameVisibilityTimeout)] = strconv.Itoa(lockDuration)
 
 	// Set message retention period with defaults
 	retentionPeriod := options.RetentionPeriod
 	if retentionPeriod <= 0 {
 		retentionPeriod = 1209600 // 14 days (AWS SQS default)
 	}
-	attrs["MessageRetentionPeriod"] = strconv.Itoa(retentionPeriod)
+	attrs[string(types.QueueAttributeNameMessageRetentionPeriod)] = strconv.Itoa(retentionPeriod)
 
 	if options.MaxDeliveryCount > 0 && options.DeadLetterConfig != nil && options.DeadLetterConfig.Enabled {
 		// For AWS SQS Dead Letter Queue, we need to create the DLQ separately
@@ -905,17 +920,17 @@ func (c *AWSSQSClient) convertToSQSAttributes(queueName string, options QueueOpt
 			dlqArn := fmt.Sprintf("arn:aws:sqs:%s:%s:%s", c.region, accountID, dlqName)
 			redrivePolicy := fmt.Sprintf(`{"deadLetterTargetArn":"%s","maxReceiveCount":%d}`,
 				dlqArn, options.MaxDeliveryCount)
-			attrs["RedrivePolicy"] = redrivePolicy
+			attrs[string(types.QueueAttributeNameRedrivePolicy)] = redrivePolicy
 		}
 	}
 
 	if options.EnableSessions {
 		// For SQS, this means FIFO queue
-		attrs["FifoQueue"] = "true"
+		attrs[string(types.QueueAttributeNameFifoQueue)] = "true"
 	}
 
 	if options.DuplicateDetection {
-		attrs["ContentBasedDeduplication"] = "true"
+		attrs[string(types.QueueAttributeNameContentBasedDeduplication)] = "true"
 	}
 
 	return attrs
@@ -925,7 +940,7 @@ func (c *AWSSQSClient) convertToSQSAttributes(queueName string, options QueueOpt
 func (c *AWSSQSClient) getAccountID() string {
 	c.accountMu.Do(func() {
 		// Get the account ID via STS GetCallerIdentity
-		result, err := c.sts.GetCallerIdentity(&sts.GetCallerIdentityInput{})
+		result, err := c.sts.GetCallerIdentity(context.Background(), &sts.GetCallerIdentityInput{})
 		if err != nil || result.Account == nil {
 			// Fallback to placeholder for testing
 			c.accountID = "123456789012"
