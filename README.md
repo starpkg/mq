@@ -1,7 +1,8 @@
-# 📨 MQ - Unified Message Queue Module
+# 📨 `mq` - Unified Message Queue Module
 
-[![Go Version](https://img.shields.io/badge/go-%3E%3D1.18-blue.svg)](https://golang.org/)
-[![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](https://opensource.org/licenses/Apache-2.0)
+[![godoc](https://pkg.go.dev/badge/github.com/starpkg/mq.svg)](https://pkg.go.dev/github.com/starpkg/mq)
+[![license](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Go Version](https://img.shields.io/badge/go-%3E%3D1.23-blue.svg)](https://golang.org/)
 
 A unified Starlark module for message queue operations across **AWS SQS** and **Azure Service Bus**. Provides a consistent API interface for common message queue operations including queue management, message sending/receiving, and dead letter queue handling.
 
