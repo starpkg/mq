@@ -72,6 +72,7 @@ Tests are table/example-driven; no third-party test framework. Keep functions sm
 ## Documentation
 
 Three layers must stay in sync (enforced by the doc standard, `plan/starpkg文档标准（DOC-STD）`):
+
 - **`README.md`** — every script-facing builtin and client method documented as a backtick whole-word (the doccov gate parses backtick spans; the fence-free "Script-facing surface" list near the top is what guarantees coverage). Names, signatures, and return shapes must match the code — e.g. `delete` returns a **list of bools**, not a single bool.
 - **GoDoc** — package comment + a doc comment on every exported symbol whose first word is the symbol name (Go convention; gated by `revive`'s `exported` rule in CI).
 - **CLAUDE.md** — this file.
