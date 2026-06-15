@@ -33,14 +33,14 @@ gofmt -l . && go vet ./...                 # must be clean before commit
 docker run --rm -v "$PWD":/src -v "$HOME/go/pkg/mod":/go/pkg/mod -w /src golang:1.23 go test -race -count=1 ./...
 ```
 
-The Go unit tests (`utils_test.go`) are self-contained (pure helpers and conversion, no network). `TestStarlarkScripts` drives the `../test/mq/*.star` integration scripts that live in the **private `starpkg/test` repo** (checked out under `test/mq/{aws-sqs,azure-servicebus}` when present): `test-*.star` must succeed, `panic-*.star` must fail. When that directory is absent (CI, fresh clone) the `base.RunStarlarkTests` harness `t.Skip`s, so a green local run does not depend on the private fixtures. Scripts reaching live AWS/Azure read credentials from a `.env` the harness loads from the test dir — never commit credentials.
+The Go unit tests (`utils_test.go`, `unit_test.go`) are self-contained (pure helpers, conversion, error taxonomy, config, and the offline builtin branches — no network). `TestStarlarkScripts` drives the `../test/mq/*.star` integration scripts that live in the **private `starpkg/test` repo** (checked out under `test/mq/{aws-sqs,azure-servicebus}` when present): `test-*.star` must succeed, `panic-*.star` must fail. When that directory is absent (CI, fresh clone) the `base.RunStarlarkTests` harness `t.Skip`s, so a green local run does not depend on the private fixtures. Scripts reaching live AWS/Azure read credentials from a `.env` the harness loads from the test dir — never commit credentials.
 
 ## Architecture (the part that spans files)
 
 The module is a **two-backend, one-interface bridge**: every script call goes through the `Client` interface (`client.go`), and the wrapper that scripts hold (`ClientWrapper`) dispatches each method onto whichever backend `connect` chose.
 
 - **`mq.go`** — the module entry. `Module` wraps a `base.ConfigurableModule`; `NewModule()` registers the ten config options (with `MQ_*` env vars; AWS/Azure secrets flagged via `genSecretConfigOption`). `LoadModule()` exposes three load-time builtins: **`connect`**, **`get_supported_services`**, **`get_client_info`**. `starConnect` merges module config with per-call overrides (`getConfigValue`), auto-detects the service, validates, then builds the backend client (`createClient`) and returns a `ClientWrapper`.
-- **`client.go`** — the `Client` interface (the unified contract: queue ops, message ops, lock, batch, schedule/cancel/peek, dead-letter ops, `Close`/`GetClientInfo`) and `ClientWrapper`, the `starlark.Value`/`HasAttrs` object scripts hold. Its `methodMap` registers all 21 object methods as `starlark.NewBuiltin("mq.<method>", …)` builtins; each method unpacks args, fetches the thread context, calls the interface, and marshals the result (or routes errors through `NormalizeError`).
+- **`client.go`** — the `Client` interface (the unified contract: queue ops, message ops, lock, batch, schedule/cancel/peek, dead-letter ops, `Close`/`GetClientInfo`) and `ClientWrapper`, the `starlark.Value`/`HasAttrs` object scripts hold. Its `methodMap` registers all 20 object methods as `starlark.NewBuiltin("mq.<method>", …)` builtins; each method unpacks args, fetches the thread context, calls the interface, and marshals the result (or routes errors through `NormalizeError`).
 - **`aws_sqs.go`** — the AWS SQS backend (`AWSSQSClient`, `NewAWSSQSClient`). SQS-specific request context/retry, queue-URL resolution, and SQS attribute mapping.
 - **`azure_servicebus.go`** — the Azure Service Bus backend (`AzureServiceBusClient`, `NewAzureServiceBusClient`): data-plane sender/receiver plus the admin client for queue management.
 - **`config.go`** — `ClientConfig` (+ `Validate`/`Copy`) and the option structs that cross the interface: `QueueOptions`, `MessageOptions`, `ReceiveOptions`, `BatchMessage`, `DeadLetterConfig`.
@@ -62,9 +62,10 @@ The module is a **two-backend, one-interface bridge**: every script call goes th
 
 ## Test organization
 
-Group by functional goal — **do not add one `*_test.go` per fix.** Two homes exist:
+Group by functional goal — **do not add one `*_test.go` per fix.** Three homes exist:
 
-- **`utils_test.go`** — table-driven unit tests for the pure helpers (`coalesceInt`, `generateMessageID`, `normalizeProperties`, `adaptBatchSize`, `min`/`max`). Add a new helper test as a **section here**.
+- **`utils_test.go`** — table-driven unit tests for the pure helpers (`coalesceInt`, `generateMessageID`, `normalizeProperties`, `adaptBatchSize`, `min`/`max`, queue-name/body validation, batch splitting, dict conversion). Add a new helper test as a **section here**.
+- **`unit_test.go`** — public, network-free unit tests for the rest of the offline logic: the error taxonomy (`NormalizeError`/`MQError`), config defaulting/validation, the `Queue`/`MessageResult` marshalling, the backend pure converters, the `ClientWrapper` Starlark-value surface, and the offline (stub / pre-network-error) branches of the script-facing builtins. Add a new offline test as a **section here** (the file opens with the section list).
 - **`example_test.go`** — `TestStarlarkScripts`, the `../test/mq` integration harness (private `starpkg/test` repo, auto-skips when absent).
 
 Tests are table/example-driven; no third-party test framework. Keep functions small (Codacy's `nloc`/cyclomatic rules). New script-visible behavior gets a `test-*.star` (must pass) or `panic-*.star` (must fail) fixture in the private test repo, not a new Go test file here.
