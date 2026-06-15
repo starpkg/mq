@@ -60,52 +60,55 @@ var (
 	_ starlark.HasAttrs = (*ClientWrapper)(nil)
 )
 
-// NewClientWrapper creates a new ClientWrapper with initialized method maps
+// NewClientWrapper creates a new ClientWrapper with initialized method maps.
+//
+// Each method is registered with a literal qualified builtin name ("mq.<method>")
+// passed directly to starlark.NewBuiltin. The runtime name is byte-identical to the
+// historical "ModuleName + \".\" + name" form, but the literal lets the doccov
+// documentation gate statically enumerate the object's script-facing surface.
 func NewClientWrapper(client Client) *ClientWrapper {
 	cw := &ClientWrapper{
 		client: client,
 	}
-	fw := func(name string, sf dataconv.StarlarkFunc) func() starlark.Value {
-		return func() starlark.Value {
-			return starlark.NewBuiltin(ModuleName+"."+name, sf)
-		}
+	bind := func(b *starlark.Builtin) func() starlark.Value {
+		return func() starlark.Value { return b }
 	}
 
 	// Initialize method map
 	cw.methodMap = map[string]func() starlark.Value{
 		// Client information
-		"get_client_info": fw("get_client_info", cw.getClientInfo),
+		"get_client_info": bind(starlark.NewBuiltin("mq.get_client_info", cw.getClientInfo)),
 
 		// Queue operations
-		"create_queue": fw("create_queue", cw.createQueue),
-		"delete_queue": fw("delete_queue", cw.deleteQueue),
-		"list_queues":  fw("list_queues", cw.listQueues),
-		"get_queue":    fw("get_queue", cw.getQueue),
-		"exists":       fw("exists", cw.exists),
-		"purge":        fw("purge", cw.purge),
-		"get_info":     fw("get_info", cw.getInfo),
+		"create_queue": bind(starlark.NewBuiltin("mq.create_queue", cw.createQueue)),
+		"delete_queue": bind(starlark.NewBuiltin("mq.delete_queue", cw.deleteQueue)),
+		"list_queues":  bind(starlark.NewBuiltin("mq.list_queues", cw.listQueues)),
+		"get_queue":    bind(starlark.NewBuiltin("mq.get_queue", cw.getQueue)),
+		"exists":       bind(starlark.NewBuiltin("mq.exists", cw.exists)),
+		"purge":        bind(starlark.NewBuiltin("mq.purge", cw.purge)),
+		"get_info":     bind(starlark.NewBuiltin("mq.get_info", cw.getInfo)),
 
 		// Message operations
-		"send":    fw("send", cw.send),
-		"receive": fw("receive", cw.receive),
-		"delete":  fw("delete", cw.delete),
+		"send":    bind(starlark.NewBuiltin("mq.send", cw.send)),
+		"receive": bind(starlark.NewBuiltin("mq.receive", cw.receive)),
+		"delete":  bind(starlark.NewBuiltin("mq.delete", cw.delete)),
 
 		// Message lock management
-		"lock":   fw("lock", cw.lock),
-		"unlock": fw("unlock", cw.unlock),
+		"lock":   bind(starlark.NewBuiltin("mq.lock", cw.lock)),
+		"unlock": bind(starlark.NewBuiltin("mq.unlock", cw.unlock)),
 
 		// Batch operations
-		"batch_send": fw("batch_send", cw.batchSend),
+		"batch_send": bind(starlark.NewBuiltin("mq.batch_send", cw.batchSend)),
 
 		// Specialized message operations
-		"schedule": fw("schedule", cw.schedule),
-		"cancel":   fw("cancel", cw.cancel),
-		"peek":     fw("peek", cw.peek),
+		"schedule": bind(starlark.NewBuiltin("mq.schedule", cw.schedule)),
+		"cancel":   bind(starlark.NewBuiltin("mq.cancel", cw.cancel)),
+		"peek":     bind(starlark.NewBuiltin("mq.peek", cw.peek)),
 
 		// Dead letter queue operations
-		"dead_letter_receive": fw("dead_letter_receive", cw.deadLetterReceive),
-		"dead_letter_requeue": fw("dead_letter_requeue", cw.deadLetterRequeue),
-		"dead_letter_purge":   fw("dead_letter_purge", cw.deadLetterPurge),
+		"dead_letter_receive": bind(starlark.NewBuiltin("mq.dead_letter_receive", cw.deadLetterReceive)),
+		"dead_letter_requeue": bind(starlark.NewBuiltin("mq.dead_letter_requeue", cw.deadLetterRequeue)),
+		"dead_letter_purge":   bind(starlark.NewBuiltin("mq.dead_letter_purge", cw.deadLetterPurge)),
 	}
 
 	// Collect all attribute names
@@ -117,30 +120,34 @@ func NewClientWrapper(client Client) *ClientWrapper {
 	return cw
 }
 
-// Implement starlark.Value interface
+// String returns a human-readable representation of the wrapped client.
 func (cw *ClientWrapper) String() string {
 	info := cw.client.GetClientInfo()
 	serviceType, _ := info["service_type"].(string)
 	return fmt.Sprintf("<mq.Client service_type=%s>", serviceType)
 }
 
+// Type returns the Starlark type name of the client object.
 func (cw *ClientWrapper) Type() string {
 	return "mq.Client"
 }
 
+// Freeze is a no-op; the client is immutable after creation (required by the Starlark interface).
 func (cw *ClientWrapper) Freeze() {
 	// Client is immutable after creation
 }
 
+// Truth reports the client as always truthy (required by the Starlark interface).
 func (cw *ClientWrapper) Truth() starlark.Bool {
 	return starlark.True
 }
 
+// Hash reports the client as unhashable, since it wraps live network state.
 func (cw *ClientWrapper) Hash() (uint32, error) {
 	return 0, fmt.Errorf("unhashable type: %s", cw.Type())
 }
 
-// Implement starlark.HasAttrs interface
+// Attr returns the named client method as a Starlark builtin, or a no-such-attr error.
 func (cw *ClientWrapper) Attr(name string) (starlark.Value, error) {
 	// Check for methods using map lookup
 	if methodFunc, exists := cw.methodMap[name]; exists {
@@ -150,6 +157,7 @@ func (cw *ClientWrapper) Attr(name string) (starlark.Value, error) {
 	return nil, starlark.NoSuchAttrError(fmt.Sprintf("%s has no .%s attribute", cw.Type(), name))
 }
 
+// AttrNames returns the sorted-by-insertion list of client method names.
 func (cw *ClientWrapper) AttrNames() []string {
 	return cw.allNames
 }

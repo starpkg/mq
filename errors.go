@@ -65,17 +65,29 @@ type MQError struct {
 // ErrorType categorizes different types of errors
 type ErrorType string
 
+// The ErrorType values categorize a normalized MQError independently of the
+// backing service, so scripts and callers can branch on a stable taxonomy.
 const (
-	ErrorTypeNotFound      ErrorType = "not_found"
+	// ErrorTypeNotFound indicates a queue or message was not found.
+	ErrorTypeNotFound ErrorType = "not_found"
+	// ErrorTypeAlreadyExists indicates a queue already exists.
 	ErrorTypeAlreadyExists ErrorType = "already_exists"
-	ErrorTypePermission    ErrorType = "permission"
-	ErrorTypeThrottling    ErrorType = "throttling"
-	ErrorTypeValidation    ErrorType = "validation"
-	ErrorTypeConnection    ErrorType = "connection"
-	ErrorTypeTimeout       ErrorType = "timeout"
-	ErrorTypeService       ErrorType = "service"
-	ErrorTypeUnsupported   ErrorType = "unsupported"
-	ErrorTypeUnknown       ErrorType = "unknown"
+	// ErrorTypePermission indicates the request was denied for lack of permission.
+	ErrorTypePermission ErrorType = "permission"
+	// ErrorTypeThrottling indicates the request was throttled or the service was busy.
+	ErrorTypeThrottling ErrorType = "throttling"
+	// ErrorTypeValidation indicates an invalid parameter or an over-large message.
+	ErrorTypeValidation ErrorType = "validation"
+	// ErrorTypeConnection indicates a connection to the service failed.
+	ErrorTypeConnection ErrorType = "connection"
+	// ErrorTypeTimeout indicates the operation timed out.
+	ErrorTypeTimeout ErrorType = "timeout"
+	// ErrorTypeService indicates a transient service-side failure or unavailability.
+	ErrorTypeService ErrorType = "service"
+	// ErrorTypeUnsupported indicates the operation is not supported by the service.
+	ErrorTypeUnsupported ErrorType = "unsupported"
+	// ErrorTypeUnknown indicates an error that did not match any known category.
+	ErrorTypeUnknown ErrorType = "unknown"
 )
 
 // Error implements the error interface

@@ -6,6 +6,8 @@
 
 A unified Starlark module for message queue operations across **AWS SQS** and **Azure Service Bus**. Provides a consistent API interface for common message queue operations including queue management, message sending/receiving, and dead letter queue handling.
 
+> **Where this fits.** `starpkg` provides *support for necessary local operations* plus *simple abstractions over common online services, for ease of use*. `mq` is squarely in the **online-service** half: it wraps two managed cloud queue services (AWS SQS, Azure Service Bus) behind one Starlark-friendly surface so a script can send, receive, and manage messages without learning either vendor SDK. It is an **L4 domain module**, depending downward on `starpkg/base` (the module/config system), `1set/starlet` (the Machine runner + `dataconv`), and transitively `1set/starlight` + `go.starlark.net`.
+
 ## ⭐ Features
 
 ### Unified API
@@ -24,6 +26,18 @@ A unified Starlark module for message queue operations across **AWS SQS** and **
 - **Session Support**: Ordered message processing (Azure)
 - **Duplicate Detection**: Prevent duplicate message processing
 - **Lock Management**: Control message visibility and processing time
+
+## 🗺️ Script-facing surface
+
+The module exposes three load-time builtins and one client object whose methods cover the full message-queue lifecycle. Each symbol is documented in detail in the [API Reference](#-api-reference) below.
+
+- **Module builtins** — `connect`, `get_supported_services`, `get_client_info`
+- **Queue operations** (client methods) — `create_queue`, `delete_queue`, `list_queues`, `get_queue`, `exists`, `purge`, `get_info`
+- **Message operations** — `send`, `receive`, `delete`, `batch_send`, `schedule`, `cancel`, `peek`
+- **Lock management** — `lock`, `unlock`
+- **Dead letter queue** — `dead_letter_receive`, `dead_letter_requeue`, `dead_letter_purge`
+
+The client object also exposes `get_client_info` as a method (same payload as the module builtin of the same name).
 
 ## 🚀 Installation
 
@@ -105,12 +119,12 @@ print(services)  # ["aws_sqs", "azure_servicebus"]
 
 #### `get_client_info(client) -> dict`
 
-Returns information about a client instance.
+Returns information about a client instance. Equivalent to calling `get_client_info()` as a method on the client object.
 
 **Parameters:**
-- `client` (Client): The client object to inspect
+- `client` (Client): The client object to inspect (must be the value returned by `connect`)
 
-**Returns:** Dictionary containing client information
+**Returns:** Dictionary containing client information. For AWS SQS the keys are `service_type`, `region`, `timeout`, `max_retries`; for Azure Service Bus they are `service_type`, `namespace`, `timeout`, `max_retries`.
 
 **Example:**
 ```python
@@ -138,7 +152,7 @@ Creates a new message queue.
 - `dead_letter_config` (dict, optional): Dead letter queue configuration
 - `enable_sessions` (bool, optional): Enable message sessions/ordering (default: false)
 - `duplicate_detection` (bool, optional): Enable duplicate detection (default: false)
-- `duplicate_window_secs` (int, optional): Duplicate detection window in seconds (default: 300)
+- `duplicate_window_secs` (int, optional): Duplicate detection window in seconds (default: `0`, which Azure Service Bus interprets as its 300-second window)
 - `max_queue_size` (int, optional): Maximum queue size in bytes (default: 0 = unlimited)
 
 **Dead Letter Config Structure:**
@@ -291,23 +305,23 @@ messages = client.receive("orders", max_count=10, wait_time=20)
 messages = client.receive("orders", peek_only=True)
 ```
 
-##### `delete(queue_name, message_ids) -> bool`
+##### `delete(queue_name, message_ids) -> list`
 
-Deletes messages from a queue.
+Deletes one or more messages from a queue.
 
 **Parameters:**
 - `queue_name` (string, required): Source queue name
-- `message_ids` (string or list, required): Message ID(s) to delete
+- `message_ids` (string or list, required): a single message ID, or a list of message IDs, to delete
 
-**Returns:** True if successful
+**Returns:** A list of booleans, one per requested message ID, where each element reports whether that message was deleted successfully. (A single-string `message_ids` still yields a one-element list.)
 
 **Example:**
 ```python
 # Delete single message
-client.delete("orders", "msg-123")
+results = client.delete("orders", "msg-123")        # -> [True]
 
 # Delete multiple messages
-client.delete("orders", ["msg-123", "msg-456"])
+results = client.delete("orders", ["msg-123", "msg-456"])  # -> [True, True]
 ```
 
 ##### `batch_send(queue_name, messages) -> list`
@@ -671,4 +685,4 @@ For more detailed troubleshooting, enable debug logging and check the error mess
 
 ## 📄 License
 
-This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
