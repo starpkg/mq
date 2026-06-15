@@ -324,7 +324,7 @@ results = client.delete("orders", "msg-123")        # -> [True]
 results = client.delete("orders", ["msg-123", "msg-456"])  # -> [True, True]
 ```
 
-##### `batch_send(queue_name, messages) -> list`
+**Note:** ⚠️ On Azure Service Bus, deletion by message ID always returns `False` for every entry: completing a Service Bus message requires the original received-message object, which this ID-based API cannot supply. AWS SQS deletes via receipt handles (real receipt handles are sent to `DeleteMessageBatch`; short test-style IDs of ≤20 chars are treated as successful without a call).
 
 Sends multiple messages in a batch operation.
 
@@ -369,7 +369,7 @@ Cancels a scheduled message.
 
 **Returns:** True if successful
 
-**Note:** ⚠️ Azure Service Bus implementation is not yet complete.
+**Note:** ❌ AWS SQS returns an `unsupported` error (SQS has no scheduled-message-cancel API). ⚠️ On Azure Service Bus this is currently a stub that returns success without calling `CancelScheduledMessage`.
 
 ##### `peek(queue_name, max_count?) -> list`
 
@@ -381,7 +381,7 @@ Peeks at messages without receiving them.
 
 **Returns:** List of MessageResult objects
 
-**Note:** ⚠️ Azure Service Bus implementation is not yet complete.
+**Note:** ❌ AWS SQS returns an `unsupported` error (SQS has no peek API). ⚠️ On Azure Service Bus this is currently a stub that returns an empty list instead of calling `PeekMessages`.
 
 #### Message Lock Management
 
@@ -396,7 +396,7 @@ Extends the lock duration of a message.
 
 **Returns:** True if successful
 
-**Note:** ⚠️ AWS SQS implementation is not yet complete.
+**Note:** ⚠️ On AWS SQS this is currently a stub that returns success without calling `ChangeMessageVisibility`. ❌ Azure Service Bus returns an `unsupported` error: lock renewal needs the original received-message object, which this message-ID-based API cannot supply.
 
 ##### `unlock(queue_name, message_id) -> bool`
 
@@ -408,7 +408,7 @@ Releases the lock on a message.
 
 **Returns:** True if successful
 
-**Note:** ⚠️ AWS SQS implementation is not yet complete.
+**Note:** ⚠️ On AWS SQS this is currently a stub that returns success without resetting the visibility timeout. ❌ Azure Service Bus returns an `unsupported` error: message abandonment needs the original received-message object, which this message-ID-based API cannot supply.
 
 #### Dead Letter Queue Operations
 
@@ -442,6 +442,8 @@ Purges all messages from the dead letter queue.
 - `queue_name` (string, required): Main queue name (DLQ is auto-resolved)
 
 **Returns:** True if successful
+
+**Note:** ⚠️ On AWS SQS this routes through the (still-stubbed) queue `purge`, so it is currently a no-op; on Azure Service Bus it drains the DLQ for real.
 
 ##### `get_client_info() -> dict`
 
@@ -499,30 +501,37 @@ Represents a message received from or sent to a queue.
 #### ✅ Fully Implemented
 - Basic queue operations (create, delete, list, get, exists)
 - Message send and receive operations
-- Dead letter queue receive and purge
+- Message delete on AWS SQS (Azure delete-by-ID always reports `False` — see below)
+- Dead letter queue receive (both services); DLQ purge on Azure (AWS DLQ purge is still a no-op stub)
 - Client connection and configuration
 - Azure Service Bus core functionality
 
-#### ⚠️ Partially Implemented
+#### ⚠️ Partially Implemented (stubs that return mock data — see ⚠️ TODO in the matrix)
 - **AWS SQS**: purge, lock/unlock, batch_send, dead_letter_requeue
-- **Azure Service Bus**: cancel, peek, dead_letter_requeue
+- **Azure Service Bus**: delete (always returns `False` — needs the original received-message object), cancel, peek, dead_letter_requeue
+
+#### ❌ Unsupported (returns an `unsupported` error — the service has no equivalent / the API needs the original message object)
+- **AWS SQS**: cancel, peek (SQS has no scheduled-message-cancel or peek API)
+- **Azure Service Bus**: lock, unlock (lock renewal / abandonment need the original received-message object, not just a message ID)
 
 #### 📋 Feature Compatibility Matrix
+
+Legend: ✅ Full — implemented against the live service. ⚠️ TODO — stub that returns mock data without a real call (usually success; Azure `delete` returns all-`False`). ❌ Unsupported — returns an `unsupported` error.
 
 | Feature | AWS SQS | Azure Service Bus |
 |---------|---------|-------------------|
 | Queue Operations | ✅ Full | ✅ Full |
 | Send Message | ✅ Full | ✅ Full |
 | Receive Message | ✅ Full | ✅ Full |
-| Delete Message | ✅ Full | ✅ Full |
+| Delete Message | ✅ Full | ⚠️ TODO |
 | Batch Send | ⚠️ TODO | ✅ Full |
 | Schedule Message | ✅ Full | ✅ Full |
-| Cancel Message | ✅ Full | ⚠️ TODO |
-| Peek Message | ✅ Full | ⚠️ TODO |
-| Lock Management | ⚠️ TODO | ✅ Full |
+| Cancel Message | ❌ Unsupported | ⚠️ TODO |
+| Peek Message | ❌ Unsupported | ⚠️ TODO |
+| Lock Management | ⚠️ TODO | ❌ Unsupported |
 | DLQ Receive | ✅ Full | ✅ Full |
 | DLQ Requeue | ⚠️ TODO | ⚠️ TODO |
-| DLQ Purge | ✅ Full | ✅ Full |
+| DLQ Purge | ⚠️ TODO | ✅ Full |
 | Queue Purge | ⚠️ TODO | ✅ Full |
 
 ## 🎯 Quick Start
