@@ -122,6 +122,7 @@ print(services)  # ["aws_sqs", "azure_servicebus"]
 Returns information about a client instance. Equivalent to calling `get_client_info()` as a method on the client object.
 
 **Parameters:**
+
 - `client` (Client): The client object to inspect (must be the value returned by `connect`)
 
 **Returns:** Dictionary containing client information. For AWS SQS the keys are `service_type`, `region`, `timeout`, `max_retries`; for Azure Service Bus they are `service_type`, `namespace`, `timeout`, `max_retries`.
@@ -507,10 +508,12 @@ Represents a message received from or sent to a queue.
 - Azure Service Bus core functionality
 
 #### ⚠️ Partially Implemented (stubs that return mock data — see ⚠️ TODO in the matrix)
+
 - **AWS SQS**: purge, lock/unlock, batch_send, dead_letter_requeue
 - **Azure Service Bus**: delete (always returns `False` — needs the original received-message object), cancel, peek, dead_letter_requeue
 
 #### ❌ Unsupported (returns an `unsupported` error — the service has no equivalent / the API needs the original message object)
+
 - **AWS SQS**: cancel, peek (SQS has no scheduled-message-cancel or peek API)
 - **Azure Service Bus**: lock, unlock (lock renewal / abandonment need the original received-message object, not just a message ID)
 
