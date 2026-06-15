@@ -17,7 +17,7 @@ package mq
 //   - backend pure   : TestExtractNamespace, TestParseDuration,
 //                       TestConvertToSQSMessageAttributes, TestServiceBusConverters,
 //                       TestConvertToSQSAttributes
-//   - wrapper object : TestClientWrapperSurface
+//   - wrapper object : TestClientWrapperSurface, TestWrapperNilResultGuard
 //   - script surface : TestConnectScript, TestConnectValidationErrors,
 //                       TestBuiltinArgErrors, TestOfflineStubMethods,
 //                       TestModuleBuiltins
@@ -862,6 +862,67 @@ func TestClientWrapperSurface(t *testing.T) {
 		if _, err := cw.Attr(must); err != nil {
 			t.Errorf("required method %q missing: %v", must, err)
 		}
+	}
+}
+
+// callWrapperMethod invokes a ClientWrapper method builtin by name with the given
+// keyword arguments and returns its (value, error). It uses a bare thread (no
+// context), exercising the same offline path the Starlark runtime would.
+func callWrapperMethod(t *testing.T, cw *ClientWrapper, method string, kwargs []starlark.Tuple) (starlark.Value, error) {
+	t.Helper()
+	attr, err := cw.Attr(method)
+	if err != nil {
+		t.Fatalf("Attr(%q) error = %v", method, err)
+	}
+	fn, ok := attr.(*starlark.Builtin)
+	if !ok {
+		t.Fatalf("Attr(%q) = %T, want *starlark.Builtin", method, attr)
+	}
+	return starlark.Call(&starlark.Thread{Name: "test"}, fn, starlark.Tuple{}, kwargs)
+}
+
+// TestWrapperNilResultGuard verifies that send/schedule do not panic when the
+// underlying Client returns (nil, nil) — a contract a stub or future backend
+// could honor even though neither shipped backend does. Without the guard,
+// result.Struct() dereferences a nil *MessageResult and the host panics.
+// The result must instead surface as Starlark None (matching create_queue/get_queue).
+func TestWrapperNilResultGuard(t *testing.T) {
+	cw := NewClientWrapper(&fakeClient{info: map[string]interface{}{"service_type": "aws_sqs"}})
+
+	// send: fakeClient.Send returns (nil, nil).
+	got, err := callWrapperMethod(t, cw, "send", []starlark.Tuple{
+		{starlark.String("queue_name"), starlark.String("q")},
+		{starlark.String("body"), starlark.String("x")},
+	})
+	if err != nil {
+		t.Fatalf("send with nil result: err = %v, want nil", err)
+	}
+	if got != starlark.None {
+		t.Errorf("send with nil result = %v, want None", got)
+	}
+
+	// schedule: fakeClient.Schedule returns (nil, nil); a valid RFC3339 time gets past parsing.
+	got2, err := callWrapperMethod(t, cw, "schedule", []starlark.Tuple{
+		{starlark.String("queue_name"), starlark.String("q")},
+		{starlark.String("body"), starlark.String("x")},
+		{starlark.String("scheduled_time"), starlark.String("2030-01-01T00:00:00Z")},
+	})
+	if err != nil {
+		t.Fatalf("schedule with nil result: err = %v, want nil", err)
+	}
+	if got2 != starlark.None {
+		t.Errorf("schedule with nil result = %v, want None", got2)
+	}
+
+	// create_queue already guards nil (fakeClient.CreateQueue returns (nil, nil)).
+	got3, err := callWrapperMethod(t, cw, "create_queue", []starlark.Tuple{
+		{starlark.String("name"), starlark.String("orders")},
+	})
+	if err != nil {
+		t.Fatalf("create_queue with nil result: err = %v, want nil", err)
+	}
+	if got3 != starlark.None {
+		t.Errorf("create_queue with nil result = %v, want None", got3)
 	}
 }
 
