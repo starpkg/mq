@@ -4,7 +4,7 @@
 [![license](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Go Version](https://img.shields.io/badge/go-%3E%3D1.23-blue.svg)](https://golang.org/)
 [![codecov](https://codecov.io/gh/starpkg/mq/graph/badge.svg)](https://codecov.io/gh/starpkg/mq)
-![binary footprint](https://img.shields.io/badge/binary_footprint-%2B5.3_MB-blue)
+![binary footprint](https://img.shields.io/badge/binary_footprint-%2B5.6_MB-blue)
 
 A unified Starlark module for message queue operations across **AWS SQS** and **Azure Service Bus**. Provides a consistent API interface for common message queue operations including queue management, message sending/receiving, and dead letter queue handling.
 
