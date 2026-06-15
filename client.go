@@ -464,6 +464,13 @@ func (cw *ClientWrapper) send(thread *starlark.Thread, b *starlark.Builtin, args
 		return none, NormalizeError("", "send", err)
 	}
 
+	// A nil result with no error is not produced by the shipped backends, but the
+	// Client interface is the public contract: guard it (as create_queue/get_queue
+	// do) so a stub or future backend cannot trigger a host nil-dereference panic.
+	if result == nil {
+		return none, nil
+	}
+
 	return result.Struct()
 }
 
@@ -720,6 +727,12 @@ func (cw *ClientWrapper) schedule(thread *starlark.Thread, b *starlark.Builtin, 
 	result, err := cw.client.Schedule(ctx, queueName, body, t, options)
 	if err != nil {
 		return none, NormalizeError("", "schedule", err)
+	}
+
+	// Mirror the send/get_queue nil-guard: a nil result with no error must not reach
+	// result.Struct() and panic. The shipped backends never hit this branch.
+	if result == nil {
+		return none, nil
 	}
 
 	return result.Struct()
